@@ -101,6 +101,7 @@ export default async function handler(req,res){
         if(req.body!==undefined)data=typeof req.body==='string'?JSON.parse(req.body):req.body;
         else{const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>40000)fail(413,'글이 너무 길어요.');parts.push(part)}data=JSON.parse(Buffer.concat(parts).toString()||'{}')}
       }catch(err){if(err.status)throw err;fail(400,'요청 형식을 확인해 주세요.')}
+      if(!data||typeof data!=='object'||Array.isArray(data))fail(400,'요청 형식을 확인해 주세요.');
     }else if(req.method!=='GET')fail(405,'지원하지 않는 요청이에요.');
     if(['register','login'].includes(data.action)){res.end(JSON.stringify(await authenticate(data,res,cloud)));return}
     const secret=(req.headers.cookie||'').match(/(?:^|;\s*)relay_session=([0-9a-f]{64})(?:;|$)/)?.[1];
