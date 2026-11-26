@@ -63,4 +63,39 @@ $('invite').onclick=async()=>{try{await navigator.clipboard.writeText(location.h
 $('home').hidden=!!roomId;$('room').hidden=!roomId;
 try{user=(await api()).name;showUser()}catch(e){toast(e.message)}
 if(roomId){await refresh();setInterval(()=>{if(!document.hidden)refresh()},3500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})}
-else{let recent;try{recent=JSON.parse(localStorage.getItem('relay-recent'))}catch{}if(recent){const a=el('a',recent.title);a.href='/?room='+encodeURIComponent(recent.id);$('recent').append(a)}else $('recent').append(el('p','참여한 집필실이 여기에 표시돼요.'))}
+
+else {
+  let recent;
+  try { recent=JSON.parse(localStorage.getItem('relay-recent')) } catch {}
+  const content=$('recent');
+  if(recent?.id && recent.title){
+    const heading=el('h3',recent.title);
+    const link=el('a','원고 열기');
+    link.href='/?room='+encodeURIComponent(recent.id);
+    content.append(heading,link);
+  }else{
+    content.append(el('h3','아직 집필 중인 원고가 없어요.'),el('p','새 집필실에서 첫 문단을 쓰거나 친구가 보낸 초대 링크로 참여하세요.'));
+  }
+  drawLandscape();
+}
+
+// A two-ink landscape print for the manuscript jacket.
+function drawLandscape(){
+  const c=$('landscape');
+  c.width=600;c.height=360;
+  const g=c.getContext('2d');
+  if(!g)return;
+  g.fillStyle='#e3dbbe';g.fillRect(0,0,600,360);
+  g.fillStyle='#bb5945';g.beginPath();g.arc(416,100,52,0,Math.PI*2);g.fill();
+  for(let layer=0;layer<4;layer++){
+    const height=x=>158+layer*48+Math.sin(x/116+layer*2.3)*33+Math.sin(x/64+layer*.7)*15+Math.cos(x/33+layer)*4;
+    g.beginPath();g.moveTo(0,height(0));
+    for(let x=0;x<=600;x+=2)g.lineTo(x,height(x));
+    g.lineTo(600,360);g.lineTo(0,360);g.closePath();
+    g.fillStyle=['#aab5a0','#758e80','#4d7167','#284e49'][layer];g.fill();
+    g.save();g.clip();g.lineWidth=.85;g.strokeStyle=layer<2?'#f4ead078':'#ece5c978';
+    for(let j=1;j<54;j++){g.beginPath();for(let x=0;x<=600;x+=3){const y=height(x)+j*4.7+Math.sin(x/40+j*.29)*j*.27;if(x)g.lineTo(x,y);else g.moveTo(x,y)}g.stroke()}g.restore();
+  }
+  let seed=171;const rand=()=>{seed=(1664525*seed+1013904223)>>>0;return seed/4294967296};
+  for(let i=0;i<18000;i++){g.fillStyle=i%2?'#48351c16':'#fff9e324';g.fillRect(rand()*600,rand()*360,1,1)}
+}
