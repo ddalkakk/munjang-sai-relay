@@ -1,4 +1,11 @@
 # 문장 사이
+
+[문장 사이 열기](https://munjang-sai-relay.vercel.app)
+
+GitHub의 `main` 브랜치에 변경 사항을 올리면 Vercel이 운영 웹 앱을 자동으로 배포합니다.
+
+## 로컬 실행
+
 Node.js 20 이상에서 start.cmd를 실행하거나 이 디렉터리에서 npm start를 실행하세요. http://localhost:4284 에서 방을 열 수 있습니다. 같은 Wi-Fi의 친구와 사용할 때는 방장도 PC의 LAN IP와 4284 포트로 접속한 뒤 초대 링크를 복사하세요. Windows 방화벽에서 개인 네트워크 접근을 허용해야 할 수 있습니다. 서버가 실행되는 동안 참여할 수 있고 원고는 .data에 저장됩니다.
 
 ## Vercel과 Supabase
