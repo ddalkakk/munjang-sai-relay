@@ -1,322 +1,164 @@
-const $ = id => document.getElementById(id);
-const roomId = new URLSearchParams(location.search).get('room');
-const brand = '컴남 릴레이 소설';
-let draftRev = null, user = null, lastUser = null, state = null, mode = 'login', intent = '', timer;
-
-function el(tag, text) {
-  const node = document.createElement(tag);
-  node.textContent = text;
-  return node;
+import {randomUUID,createHash,randomBytes,scrypt,timingSafeEqual} from 'node:crypto';
+import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
+const dir=new URL('../.data/',import.meta.url);
+const hash=s=>createHash('sha256').update(s).digest('hex');
+function fail(status,message){throw Object.assign(new Error(message),{status})}
+function field(value,max){if(typeof value!=='string'||!value.trim()||value.trim().length>max)fail(400,'입력한 글의 길이를 확인해 주세요.');return value.trim()}
+async function remote(query,method='GET',body){
+  const key=process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const r=await fetch(process.env.SUPABASE_URL+'/rest/v1/relay_rooms'+query,{method,headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json',Prefer:'return=representation'},body:body&&JSON.stringify(body)});
+  if(!r.ok)fail(503,'저장소 연결을 확인해 주세요.');return r.json()
 }
-
-function toast(text) {
-  const box = $('notice');
-  box.textContent = '';
-  void box.offsetWidth;
-  box.textContent = text;
-  clearTimeout(timer);
-  timer = setTimeout(() => { box.textContent = ''; }, 3500);
-}
-
-async function api(data, id) {
-  const headers = { 'Content-Type': 'application/json' };
-  const legacy = localStorage.getItem('relay-key');
-  if (id && legacy) headers['X-Legacy-Key'] = legacy;
-  const r = await fetch('/api/room' + (id ? '?id=' + encodeURIComponent(id) : ''), {
-    method: data ? 'POST' : 'GET',
-    headers,
-    body: data && JSON.stringify(data),
-    cache: 'no-store'
-  });
-  let v = {};
-  try { v = await r.json(); } catch {}
-  if (!r.ok) throw Error(v.error || '잠시 후 다시 시도해 주세요.');
-  return v;
-}
-
-function setTheme(dark) {
-  document.documentElement.classList.toggle('dark', dark);
-  $('theme').setAttribute('aria-pressed', String(dark));
-}
-setTheme(
-  localStorage.getItem('theme')
-    ? localStorage.getItem('theme') === 'dark'
-    : matchMedia('(prefers-color-scheme:dark)').matches
-);
-$('theme').onclick = () => {
-  const dark = !document.documentElement.classList.contains('dark');
-  setTheme(dark);
-  localStorage.setItem('theme', dark ? 'dark' : 'light');
-};
-
-function authMode(value) {
-  mode = value;
-  const reg = mode === 'register';
-  $('login').setAttribute('aria-pressed', String(!reg));
-  $('register').setAttribute('aria-pressed', String(reg));
-  const pw = $('credentials').elements.password;
-  pw.autocomplete = reg ? 'new-password' : 'current-password';
-  pw.minLength = reg ? 8 : 1;
-  $('hint').textContent = reg
-    ? '집필에 사용할 이름과 8자 이상의 비밀번호를 정하세요.'
-    : '가입할 때 사용한 이름과 비밀번호를 입력하세요.';
-  $('submitAuth').textContent = reg ? '계정 만들고 로그인' : '로그인';
-  $('error').textContent = '';
-}
-
-function dialog(part) {
-  for (const k of ['auth', 'create', 'profile']) $(k).hidden = k !== part;
-  $('heading').textContent = { auth: '작가 계정', create: '새 집필실', profile: '내 계정' }[part];
-  $('error').textContent = '';
-  if (part === 'auth') authMode('login');
-  if (!$('modal').open) $('modal').showModal();
-}
-
-$('modal').onclose = () => {
-  const pw = $('credentials').elements.password;
-  pw.value = '';
-  pw.type = 'password';
-  $('showpw').textContent = '보기';
-  intent = '';
-};
-$('modal').addEventListener('click', e => {
-  if (e.target === $('modal')) $('modal').close();
-});
-$('close').onclick = () => $('modal').close();
-$('showpw').onclick = () => {
-  const p = $('credentials').elements.password;
-  p.type = p.type === 'password' ? 'text' : 'password';
-  $('showpw').textContent = p.type === 'password' ? '보기' : '숨기기';
-};
-$('login').onclick = () => authMode('login');
-$('register').onclick = () => authMode('register');
-
-function showUser() {
-  $('account').textContent = user || '로그인';
-  $('who').textContent = user ? user + ' 님으로 로그인했어요.' : '';
-}
-$('account').onclick = () => { intent = ''; dialog(user ? 'profile' : 'auth'); };
-$('new').onclick = () => { intent = 'create'; dialog(user ? 'create' : 'auth'); };
-
-function bindCounter(textarea, counterId) {
-  const counter = $(counterId);
-  if (!textarea || !counter) return;
-  const update = () => { counter.textContent = textarea.value.length.toLocaleString() + ' / 3,000자'; };
-  textarea.addEventListener('input', update);
-  update();
-}
-bindCounter($('create')?.elements.text, 'createCount');
-bindCounter($('write')?.elements.text, 'writeCount');
-
-$('write')?.elements.text.addEventListener('input', e => {
-  if (!e.target.value) draftRev = null;
-  else if (draftRev === null && state) draftRev = state.rev;
-});
-
-function draw(s) {
-  if (state && s.rev < state.rev) return;
-  const same = state && s.rev === state.rev && s.me === state.me && s.reclaim === state.reclaim && lastUser === user;
-  const prevLen = state ? state.paragraphs.length : s.paragraphs.length;
-  state = s;
-  lastUser = user;
-  if (same) return;
-
-  $('title').textContent = s.title;
-  document.title = s.title + ' · ' + brand;
-  if (s.me >= 0) localStorage.setItem('relay-recent', JSON.stringify({ id: s.id, title: s.title }));
-
-  $('story').replaceChildren(...s.paragraphs.map((p, i) => {
-    const section = el('section', '');
-    if (i >= prevLen) section.classList.add('is-new');
-    section.append(el('small', (i + 1) + '번째 문단 · ' + p.name), el('p', p.text));
-    return section;
-  }));
-
-  $('people').replaceChildren(...s.people.map((p, i) => {
-    const current = s.started && s.turn === i;
-    const li = el('li', p + (i === s.me ? ' (나)' : '') + (current ? ' · 집필 중' : ''));
-    li.classList.toggle('current', current);
-    return li;
-  }));
-
-  $('status').textContent = s.started
-    ? s.people[s.turn] + ' 님이 이어 쓸 차례예요.'
-    : s.people.length + '명 참여 중 · 두 명 이상 모이면 시작할 수 있어요.';
-  $('join').hidden = s.me >= 0 || (s.started && !s.reclaim);
-  $('join').textContent = !user ? '로그인하고 참여하기' : s.reclaim ? '기존 참여 기록 연결' : '집필에 참여하기';
-  $('start').hidden = !user || s.started || s.me !== 0 || s.people.length < 2;
-  $('write').hidden = !user || !s.started || s.turn !== s.me;
-}
-
-async function refresh() {
-  try { draw(await api(null, roomId)); }
-  catch (e) { if (!state) $('status').textContent = e.message; }
-}
-
-async function run(button, fn) {
-  button.disabled = true;
-  const original = button.textContent;
-  button.textContent = '처리 중…';
-  try { await fn(); }
-  catch (e) {
-    if ($('modal').open) $('error').textContent = e.message;
-    else toast(e.message);
+async function load(id,cloud){
+  if(process.env.BLOB_READ_WRITE_TOKEN){
+    const {get}=await import('@vercel/blob');
+    const result=await get('rooms/'+id+'.json',{access:'private',useCache:false});
+    if(!result)return;
+    const record=await new Response(result.stream).json();
+    Object.defineProperty(record,'etag',{value:result.blob.etag});
+    return record;
   }
-  finally {
-    if (button.textContent === '처리 중…') button.textContent = original;
-    button.disabled = false;
+  if(cloud)return (await remote('?id=eq.'+id))[0];
+  try{return JSON.parse(await readFile(new URL(id+'.json',dir),'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
+}
+async function save(record,old,cloud){
+  if(process.env.BLOB_READ_WRITE_TOKEN){
+    const {put,BlobPreconditionFailedError}=await import('@vercel/blob');
+    const options={access:'private',addRandomSuffix:false,contentType:'application/json'};
+    if(old!==null){options.allowOverwrite=true;options.ifMatch=record.etag}
+    try{await put('rooms/'+record.id+'.json',JSON.stringify(record),options)}
+    catch(error){if(error instanceof BlobPreconditionFailedError)fail(409,'집필실이 변경되었어요. 다시 확인해 주세요.');throw error}
+    return;
   }
+  if(cloud){const rows=await remote(old===null?'':'?id=eq.'+record.id+'&rev=eq.'+old,old===null?'POST':'PATCH',record);if(!rows.length)fail(409,'방이 변경되었어요. 다시 확인해 주세요.');return}
+  await mkdir(dir,{recursive:true});
+  if(old===null){
+    try{await writeFile(new URL(record.id+'.json',dir),JSON.stringify(record),{flag:'wx'})}
+    catch(e){if(e.code==='EEXIST')fail(409,'이미 등록된 항목이에요.');throw e}
+    return
+  }
+  const tmp=new URL(record.id+'.tmp',dir);
+  await writeFile(tmp,JSON.stringify(record));await rename(tmp,new URL(record.id+'.json',dir))
 }
 
-$('credentials').onsubmit = e => {
-  e.preventDefault();
-  run($('submitAuth'), async () => {
-    const v = await api({ action: mode, ...Object.fromEntries(new FormData(e.target)) });
-    user = v.name;
-    showUser();
-    e.target.elements.password.value = '';
-    if (intent === 'create') { dialog('create'); return; }
-    const join = intent === 'join';
-    $('modal').close();
-    if (roomId) {
-      if (join) draw(await api({ action: 'join' }, roomId));
-      else await refresh();
-    }
-    toast('로그인했어요.');
-  });
-};
-
-$('logout').onclick = () => run($('logout'), async () => {
-  await api({ action: 'logout' });
-  location.reload();
-});
-
-$('create').onsubmit = e => {
-  e.preventDefault();
-  run(e.submitter, async () => {
-    const v = await api({ action: 'create', ...Object.fromEntries(new FormData(e.target)) });
-    location.href = '/?room=' + v.id;
-  });
-};
-
-$('join').onclick = () => {
-  if (!user) { intent = 'join'; dialog('auth'); return; }
-  run($('join'), async () => draw(await api({ action: 'join' }, roomId)));
-};
-
-$('start').onclick = () => run($('start'), async () => draw(await api({ action: 'start' }, roomId)));
-
-$('write').onsubmit = e => {
-  e.preventDefault();
-  run(e.submitter, async () => {
-    const v = await api({ action: 'write', text: e.target.elements.text.value, rev: draftRev ?? state.rev }, roomId);
-    draftRev = null;
-    e.target.reset();
-    if ($('writeCount')) $('writeCount').textContent = '0 / 3,000자';
-    draw(v);
-    toast('다음 작가에게 차례를 넘겼어요.');
-  });
-};
-
-$('invite').onclick = async () => {
-  try {
-    await navigator.clipboard.writeText(location.href);
-    toast('초대 링크를 복사했어요.');
-  } catch {
-    $('link').hidden = false;
-    $('link').value = location.href;
-    $('link').select();
-  }
-};
-
-// A two-ink landscape print for the manuscript jacket (HiDPI sharp).
-function drawLandscape() {
-  const c = $('landscape');
-  if (!c) return;
-  const w = 600, h = 360, scale = 2;
-  c.width = w * scale;
-  c.height = h * scale;
-  const g = c.getContext('2d');
-  if (!g) return;
-  g.scale(scale, scale);
-
-  g.fillStyle = '#e3dbbe';
-  g.fillRect(0, 0, w, h);
-  g.fillStyle = '#bb5945';
-  g.beginPath();
-  g.arc(416, 100, 52, 0, Math.PI * 2);
-  g.fill();
-
-  for (let layer = 0; layer < 4; layer++) {
-    const height = x => 158 + layer * 48 + Math.sin(x / 116 + layer * 2.3) * 33 + Math.sin(x / 64 + layer * 0.7) * 15 + Math.cos(x / 33 + layer) * 4;
-    g.beginPath();
-    g.moveTo(0, height(0));
-    for (let x = 0; x <= w; x += 2) g.lineTo(x, height(x));
-    g.lineTo(w, h);
-    g.lineTo(0, h);
-    g.closePath();
-    g.fillStyle = ['#aab5a0', '#758e80', '#4d7167', '#284e49'][layer];
-    g.fill();
-
-    g.save();
-    g.clip();
-    g.lineWidth = 0.85;
-    g.strokeStyle = layer < 2 ? '#f4ead078' : '#ece5c978';
-    for (let j = 1; j < 54; j++) {
-      g.beginPath();
-      for (let x = 0; x <= w; x += 3) {
-        const y = height(x) + j * 4.7 + Math.sin(x / 40 + j * 0.29) * j * 0.27;
-        if (x) g.lineTo(x, y);
-        else g.moveTo(x, y);
+const queues=new Map();
+async function locked(key,fn){
+  const pending=(queues.get(key)||Promise.resolve()).catch(()=>{}).then(fn);
+  queues.set(key,pending);
+  try{return await pending}finally{if(queues.get(key)===pending)queues.delete(key)}
+}
+function privateId(type,key){
+  const h=hash(type+':'+key);
+  return [h.slice(0,8),h.slice(8,12),'8'+h.slice(13,16),'a'+h.slice(17,20),h.slice(20,32)].join('-')
+}
+const derive=(password,salt)=>new Promise((resolve,reject)=>scrypt(password,salt,64,(e,k)=>e?reject(e):resolve(k)));
+function cookie(res,value,age){
+  res.setHeader('Set-Cookie','relay_session='+value+'; Path=/; HttpOnly; SameSite=Lax; Max-Age='+age+(process.env.VERCEL?'; Secure':''))
+}
+async function rememberRoom(userId,room,cloud){
+  try{
+    await locked(userId,async()=>{
+      const record=await load(userId,cloud);
+      if(!record?.story)return;
+      const rooms=Array.isArray(record.story.rooms)?record.story.rooms:[];
+      const next=[{id:room.id,title:room.title,updatedAt:Date.now()},...rooms.filter(r=>r&&r.id!==room.id)].slice(0,50);
+      record.story.rooms=next;
+      const old=record.rev++;
+      await save(record,old,cloud);
+    });
+  }catch{}
+}
+async function authenticate(data,res,cloud){
+  const name=field(data.name,20).normalize('NFC'),pw=data.password;
+  if(typeof pw!=='string'||!pw.length||pw.length>128)fail(400,'비밀번호를 확인해 주세요.');
+  const id=privateId('account',name.toLowerCase());
+  return locked(id,async()=>{
+    let record=await load(id,cloud);
+    if(data.action==='register'){
+      if(pw.length<8)fail(400,'비밀번호는 8자 이상 입력해 주세요.');
+      if(record)fail(409,'이미 등록된 이름이에요.');
+      const salt=randomBytes(16).toString('hex');
+      record={id,rev:1,story:{name,salt,digest:(await derive(pw,salt)).toString('hex'),rooms:[]}};
+      await save(record,null,cloud)
+    }else{
+      const a=record?.story;
+      if(a?.retryAfter>Date.now())fail(429,'5분 뒤 다시 시도해 주세요.');
+      const k=await derive(pw,a?.salt||'relay-login-fallback');
+      if(!a||!timingSafeEqual(k,Buffer.from(a.digest,'hex'))){
+        if(a){a.failures=(a.failures||0)+1;if(a.failures>=8){a.retryAfter=Date.now()+300000;a.failures=0}const rev=record.rev++;await save(record,rev,cloud)}
+        fail(401,'이름 또는 비밀번호를 확인해 주세요.')
       }
-      g.stroke();
+      if(a.failures||a.retryAfter){a.failures=0;a.retryAfter=0;const rev=record.rev++;await save(record,rev,cloud)}
     }
-    g.restore();
-  }
-
-  let seed = 171;
-  const rand = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 4294967296; };
-  for (let i = 0; i < 18000; i++) {
-    g.fillStyle = i % 2 ? '#48351c16' : '#fff9e324';
-    g.fillRect(rand() * w, rand() * h, 1, 1);
-  }
+    const secret=randomBytes(32).toString('hex'),age=604800;
+    await save({id:privateId('session',secret),rev:1,story:{user:{id,name:record.story.name},expires:Date.now()+age*1000}},null,cloud);
+    cookie(res,secret,age);
+    return {name:record.story.name,rooms:Array.isArray(record.story.rooms)?record.story.rooms:[]}
+  })
 }
-
-function renderHome() {
-  let recent;
-  try { recent = JSON.parse(localStorage.getItem('relay-recent')); } catch {}
-  const content = $('recent');
-  content.replaceChildren();
-  if (recent?.id && recent.title) {
-    const heading = el('h3', recent.title);
-    const link = el('a', '원고 열기');
-    link.href = '/?room=' + encodeURIComponent(recent.id);
-    content.append(heading, link);
-  } else {
-    content.append(
-      el('h3', '아직 집필 중인 원고가 없어요.'),
-      el('p', '새 집필실에서 첫 문단을 쓰거나 친구가 보낸 초대 링크로 참여하세요.')
-    );
-  }
-  drawLandscape();
+function view(r,user,legacy){
+  const {people,...story}=r.story;
+  return {id:r.id,rev:r.rev,...story,people:people.map(p=>p.name),me:user?people.findIndex(p=>p.account===user.id):-1,
+    reclaim:!!legacy&&people.some(p=>!p.account&&p.key===hash(legacy))}
 }
-
-// 1. 화면 전환 및 홈 UI는 서버 응답을 기다리지 않고 즉시 렌더링
-$('home').hidden = !!roomId;
-$('room').hidden = !roomId;
-if (!roomId) renderHome();
-
-// 2. 세션 확인 및 방 동기화는 비동기로 실행
-(async () => {
-  try {
-    user = (await api()).name;
-    showUser();
-  } catch (e) {
-    toast(e.message);
-  }
-  if (roomId) {
-    await refresh();
-    setInterval(() => { if (!document.hidden) refresh(); }, 3500);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-  }
-})();
+export default async function handler(req,res){
+  res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json; charset=utf-8');
+  try{
+    const cloud=Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY);
+    if(process.env.VERCEL&&!cloud&&!process.env.BLOB_READ_WRITE_TOKEN)fail(503,'저장소 연결을 확인해 주세요.');
+    const id=new URL(req.url,'http://localhost').searchParams.get('id');
+    if(id&&!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id))fail(404,'방을 찾을 수 없어요.');
+    let data={};
+    if(req.method==='POST'){
+      if(!req.headers['content-type']?.startsWith('application/json'))fail(415,'JSON 요청이 필요해요.');
+      try{
+        if(req.body!==undefined)data=typeof req.body==='string'?JSON.parse(req.body):req.body;
+        else{const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>40000)fail(413,'글이 너무 길어요.');parts.push(part)}data=JSON.parse(Buffer.concat(parts).toString()||'{}')}
+      }catch(err){if(err.status)throw err;fail(400,'요청 형식을 확인해 주세요.')}
+      if(!data||typeof data!=='object'||Array.isArray(data))fail(400,'요청 형식을 확인해 주세요.');
+    }else if(req.method!=='GET')fail(405,'지원하지 않는 요청이에요.');
+    if(['register','login'].includes(data.action)){res.end(JSON.stringify(await authenticate(data,res,cloud)));return}
+    const secret=(req.headers.cookie||'').match(/(?:^|;\s*)relay_session=([0-9a-f]{64})(?:;|$)/)?.[1];
+    const session=secret&&await load(privateId('session',secret),cloud);
+    const user=session?.story.expires>Date.now()?session.story.user:null;
+    if(data.action==='logout'){if(user){session.story.expires=0;const old=session.rev++;await save(session,old,cloud)}cookie(res,'',0);res.end('{}');return}
+    if(!id&&req.method==='GET'){
+      let rooms=[];
+      if(user){
+        const account=await load(user.id,cloud);
+        if(Array.isArray(account?.story?.rooms))rooms=account.story.rooms;
+      }
+      res.end(JSON.stringify({name:user?.name||null,rooms}));return
+    }
+    if(req.method==='POST'&&!user)fail(401,'로그인 후 작성할 수 있어요.');
+    const legacy=req.headers['x-legacy-key'],key=id||randomUUID();
+    const result=await locked(key,async()=>{
+      if(!id&&data.action==='create'){
+        const {name}=user,title=field(data.title,80),text=field(data.text,3000);
+        const r={id:key,rev:1,story:{title,people:[{name,account:user.id}],started:false,turn:0,paragraphs:[{name,text}]}};
+        await save(r,null,cloud);return view(r,user,legacy)
+      }
+      const r=id&&await load(id,cloud);if(!r?.story.people)fail(404,'방을 찾을 수 없어요.');
+      if(req.method==='GET')return view(r,user,legacy);
+      const s=r.story,me=s.people.findIndex(p=>p.account===user.id);
+      if(data.action==='join'){
+        if(me>=0)return view(r,user,legacy);
+        const prior=legacy&&s.people.find(p=>!p.account&&p.key===hash(legacy));
+        if(prior){prior.account=user.id;delete prior.key}
+        else{if(s.started)fail(409,'이미 집필을 시작했어요.');
+          if(s.people.some(p=>p.name===user.name))fail(409,'이 방에서 이미 사용 중인 이름이에요.');
+          s.people.push({name:user.name,account:user.id})}
+      }else if(data.action==='start'){
+        if(me!==0||s.started||s.people.length<2)fail(409,'두 명 이상 모이면 방장이 시작할 수 있어요.');s.started=true;s.turn=1
+      }else if(data.action==='write'){
+        if(!s.started||me!==s.turn||data.rev!==r.rev)fail(409,'현재 집필 차례를 확인해 주세요.');
+        s.paragraphs.push({name:s.people[me].name,text:field(data.text,3000)});s.turn=(me+1)%s.people.length
+      }else fail(400,'지원하지 않는 요청이에요.');
+      const old=r.rev++;await save(r,old,cloud);return view(r,user,legacy)
+    });
+    if(user&&req.method==='POST'&&['create','join','write'].includes(data.action)){
+      await rememberRoom(user.id,result,cloud);
+    }
+    res.end(JSON.stringify(result))
+  }catch(e){res.statusCode=e.status||500;res.end(JSON.stringify({error:e.status?e.message:'요청을 처리하지 못했어요.'}))}
+}
