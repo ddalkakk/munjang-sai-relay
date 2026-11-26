@@ -1,4 +1,4 @@
-import {randomUUID,createHash} from 'node:crypto';
+import {randomUUID,createHash,randomBytes,scrypt,timingSafeEqual} from 'node:crypto';
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 const dir=new URL('../.data/',import.meta.url);
 const hash=s=>createHash('sha256').update(s).digest('hex');
@@ -31,49 +31,107 @@ async function save(record,old,cloud){
     return;
   }
   if(cloud){const rows=await remote(old===null?'':'?id=eq.'+record.id+'&rev=eq.'+old,old===null?'POST':'PATCH',record);if(!rows.length)fail(409,'방이 변경되었어요. 다시 확인해 주세요.');return}
-  await mkdir(dir,{recursive:true});const tmp=new URL(record.id+'.tmp',dir);
+  await mkdir(dir,{recursive:true});
+  if(old===null){
+    try{await writeFile(new URL(record.id+'.json',dir),JSON.stringify(record),{flag:'wx'})}
+    catch(e){if(e.code==='EEXIST')fail(409,'이미 등록된 항목이에요.');throw e}
+    return
+  }
+  const tmp=new URL(record.id+'.tmp',dir);
   await writeFile(tmp,JSON.stringify(record));await rename(tmp,new URL(record.id+'.json',dir))
 }
-function view(r,token){
-  const {people,...story}=r.story;return {id:r.id,rev:r.rev,...story,people:people.map(p=>p.name),me:people.findIndex(p=>p.key===hash(token))}
-}
+
 const queues=new Map();
+async function locked(key,fn){
+  const pending=(queues.get(key)||Promise.resolve()).catch(()=>{}).then(fn);
+  queues.set(key,pending);
+  try{return await pending}finally{if(queues.get(key)===pending)queues.delete(key)}
+}
+function privateId(type,key){
+  const h=hash(type+':'+key);
+  return [h.slice(0,8),h.slice(8,12),'8'+h.slice(13,16),'a'+h.slice(17,20),h.slice(20,32)].join('-')
+}
+const derive=(password,salt)=>new Promise((resolve,reject)=>scrypt(password,salt,64,(e,k)=>e?reject(e):resolve(k)));
+function cookie(res,value,age){
+  res.setHeader('Set-Cookie','relay_session='+value+'; Path=/; HttpOnly; SameSite=Lax; Max-Age='+age+(process.env.VERCEL?'; Secure':''))
+}
+async function authenticate(data,res,cloud){
+  const name=field(data.name,20).normalize('NFC'),pw=data.password;
+  if(typeof pw!=='string'||!pw.length||pw.length>128)fail(400,'비밀번호를 확인해 주세요.');
+  const id=privateId('account',name.toLowerCase());
+  return locked(id,async()=>{
+    let record=await load(id,cloud);
+    if(data.action==='register'){
+      if(pw.length<8)fail(400,'비밀번호는 8자 이상 입력해 주세요.');
+      if(record)fail(409,'이미 등록된 이름이에요.');
+      const salt=randomBytes(16).toString('hex');
+      record={id,rev:1,story:{name,salt,digest:(await derive(pw,salt)).toString('hex')}};
+      await save(record,null,cloud)
+    }else{
+      const a=record?.story;
+      if(a?.retryAfter>Date.now())fail(429,'5분 뒤 다시 시도해 주세요.');
+      const k=await derive(pw,a?.salt||'relay-login-fallback');
+      if(!a||!timingSafeEqual(k,Buffer.from(a.digest,'hex'))){
+        if(a){a.failures=(a.failures||0)+1;if(a.failures>=8){a.retryAfter=Date.now()+300000;a.failures=0}const rev=record.rev++;await save(record,rev,cloud)}
+        fail(401,'이름 또는 비밀번호를 확인해 주세요.')
+      }
+      if(a.failures||a.retryAfter){a.failures=0;a.retryAfter=0;const rev=record.rev++;await save(record,rev,cloud)}
+    }
+    const secret=randomBytes(32).toString('hex'),age=604800;
+    await save({id:privateId('session',secret),rev:1,story:{user:{id,name:record.story.name},expires:Date.now()+age*1000}},null,cloud);
+    cookie(res,secret,age);return {name:record.story.name}
+  })
+}
+function view(r,user,legacy){
+  const {people,...story}=r.story;
+  return {id:r.id,rev:r.rev,...story,people:people.map(p=>p.name),me:user?people.findIndex(p=>p.account===user.id):-1,
+    reclaim:!!legacy&&people.some(p=>!p.account&&p.key===hash(legacy))}
+}
 export default async function handler(req,res){
-  res.setHeader('Cache-Control','no-store');
+  res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json; charset=utf-8');
   try{
     const cloud=Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY);
-    if(process.env.VERCEL&&!cloud&&!process.env.BLOB_READ_WRITE_TOKEN)fail(503,'공유 저장소 설정이 필요해요.');
-    const token=(req.headers.authorization||'').replace(/^Bearer /,'');
-    if(!/^[a-f0-9-]{36}$/.test(token))fail(400,'브라우저에서 방을 다시 열어 주세요.');
+    if(process.env.VERCEL&&!cloud&&!process.env.BLOB_READ_WRITE_TOKEN)fail(503,'저장소 연결을 확인해 주세요.');
     const id=new URL(req.url,'http://localhost').searchParams.get('id');
-    if(id&&!/^[a-f0-9-]{36}$/.test(id))fail(404,'방을 찾을 수 없어요.');
-    let data={};if(req.method==='POST'){
+    if(id&&!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id))fail(404,'방을 찾을 수 없어요.');
+    let data={};
+    if(req.method==='POST'){
+      if(!req.headers['content-type']?.startsWith('application/json'))fail(415,'JSON 요청이 필요해요.');
       if(req.body!==undefined)data=typeof req.body==='string'?JSON.parse(req.body):req.body;
-      else {let raw='';for await(const part of req){raw+=part;if(raw.length>40000)fail(413,'글이 너무 길어요.')}data=JSON.parse(raw||'{}')}
+      else{const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>40000)fail(413,'글이 너무 길어요.');parts.push(part)}data=JSON.parse(Buffer.concat(parts).toString()||'{}')}
     }else if(req.method!=='GET')fail(405,'지원하지 않는 요청이에요.');
-    const key=id||randomUUID();
-    const run=async()=>{
-      if(!id&&req.method==='POST'&&data.action==='create'){
-        const name=field(data.name,20),title=field(data.title,80),text=field(data.text,3000);
-        const r={id:key,rev:1,story:{title,people:[{name,key:hash(token)}],started:false,turn:0,paragraphs:[{name,text}]}};
-        await save(r,null,cloud);return view(r,token)
+    if(['register','login'].includes(data.action)){res.end(JSON.stringify(await authenticate(data,res,cloud)));return}
+    const secret=(req.headers.cookie||'').match(/(?:^|;\s*)relay_session=([0-9a-f]{64})(?:;|$)/)?.[1];
+    const session=secret&&await load(privateId('session',secret),cloud);
+    const user=session?.story.expires>Date.now()?session.story.user:null;
+    if(data.action==='logout'){if(user){session.story.expires=0;const old=session.rev++;await save(session,old,cloud)}cookie(res,'',0);res.end('{}');return}
+    if(!id&&req.method==='GET'){res.end(JSON.stringify({name:user?.name||null}));return}
+    if(req.method==='POST'&&!user)fail(401,'로그인 후 작성할 수 있어요.');
+    const legacy=req.headers['x-legacy-key'],key=id||randomUUID();
+    const result=await locked(key,async()=>{
+      if(!id&&data.action==='create'){
+        const {name}=user,title=field(data.title,80),text=field(data.text,3000);
+        const r={id:key,rev:1,story:{title,people:[{name,account:user.id}],started:false,turn:0,paragraphs:[{name,text}]}};
+        await save(r,null,cloud);return view(r,user,legacy)
       }
-      const r=id&&await load(id,cloud);if(!r)fail(404,'초대 링크에 해당하는 방을 찾을 수 없어요.');
-      if(req.method==='GET')return view(r,token);
-      const s=r.story,me=s.people.findIndex(p=>p.key===hash(token));
+      const r=id&&await load(id,cloud);if(!r?.story.people)fail(404,'방을 찾을 수 없어요.');
+      if(req.method==='GET')return view(r,user,legacy);
+      const s=r.story,me=s.people.findIndex(p=>p.account===user.id);
       if(data.action==='join'){
-        if(me>=0)return view(r,token);
-        const name=field(data.name,20);if(s.started)fail(409,'이미 집필을 시작한 방이에요.');
-        if(s.people.some(p=>p.name===name))fail(409,'이미 사용 중인 필명이에요.');s.people.push({name,key:hash(token)})
+        if(me>=0)return view(r,user,legacy);
+        const prior=legacy&&s.people.find(p=>!p.account&&p.key===hash(legacy));
+        if(prior){prior.account=user.id;delete prior.key}
+        else{if(s.started)fail(409,'이미 집필을 시작했어요.');
+          if(s.people.some(p=>p.name===user.name))fail(409,'이 방에서 이미 사용 중인 이름이에요.');
+          s.people.push({name:user.name,account:user.id})}
       }else if(data.action==='start'){
         if(me!==0||s.started||s.people.length<2)fail(409,'두 명 이상 모이면 방장이 시작할 수 있어요.');s.started=true;s.turn=1
       }else if(data.action==='write'){
         if(!s.started||me!==s.turn||data.rev!==r.rev)fail(409,'현재 집필 차례를 확인해 주세요.');
         s.paragraphs.push({name:s.people[me].name,text:field(data.text,3000)});s.turn=(me+1)%s.people.length
-      }else fail(400,'알 수 없는 요청이에요.');
-      const old=r.rev++;await save(r,old,cloud);return view(r,token)
-    };
-    const pending=(queues.get(key)||Promise.resolve()).catch(()=>{}).then(run);queues.set(key,pending);
-    try{res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(await pending))}finally{if(queues.get(key)===pending)queues.delete(key)}
+      }else fail(400,'지원하지 않는 요청이에요.');
+      const old=r.rev++;await save(r,old,cloud);return view(r,user,legacy)
+    });
+    res.end(JSON.stringify(result))
   }catch(e){res.statusCode=e.status||500;res.end(JSON.stringify({error:e.status?e.message:'요청을 처리하지 못했어요.'}))}
 }

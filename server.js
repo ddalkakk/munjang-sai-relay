@@ -39,4 +39,4 @@ server.on('error',async error => {
   console.error('서버 실행 실패',error.message);
   process.exitCode=1;
 });
-server.listen(port,'0.0.0.0',()=>{console.log('문장 사이 · '+url);openBrowser()});
+server.listen(port,'0.0.0.0',()=>{console.log('컴남 릴레이 소설 · '+url);openBrowser()});
