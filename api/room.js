@@ -1,6 +1,7 @@
 import {randomUUID,createHash,randomBytes,scrypt,timingSafeEqual} from 'node:crypto';
-import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,rename,mkdir,readdir} from 'node:fs/promises';
 const dir=new URL('../.data/',import.meta.url);
+const roomUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const hash=s=>createHash('sha256').update(s).digest('hex');
 function fail(status,message){throw Object.assign(new Error(message),{status})}
 function field(value,max){if(typeof value!=='string'||!value.trim()||value.trim().length>max)fail(400,'입력한 글의 길이를 확인해 주세요.');return value.trim()}
@@ -55,6 +56,93 @@ const derive=(password,salt)=>new Promise((resolve,reject)=>scrypt(password,salt
 function cookie(res,value,age){
   res.setHeader('Set-Cookie','relay_session='+value+'; Path=/; HttpOnly; SameSite=Lax; Max-Age='+age+(process.env.VERCEL?'; Secure':''))
 }
+function mergeRoomLists(a,b){
+  const map=new Map();
+  for(const item of [...(Array.isArray(a)?a:[]),...(Array.isArray(b)?b:[])]){
+    if(!item?.id||!item.title)continue;
+    const prev=map.get(item.id);
+    if(!prev||(item.updatedAt||0)>(prev.updatedAt||0))map.set(item.id,item);
+  }
+  return [...map.values()].sort((x,y)=>(y.updatedAt||0)-(x.updatedAt||0)).slice(0,50);
+}
+async function scanUserRooms(userId,cloud){
+  const found=[];
+  try{
+    if(process.env.BLOB_READ_WRITE_TOKEN){
+      const {list}=await import('@vercel/blob');
+      const targets=[];
+      let cursor;
+      do{
+        const res=await list({prefix:'rooms/',cursor,limit:1000});
+        for(const b of res.blobs){
+          const m=b.pathname.match(/^rooms\/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\.json$/);
+          if(m)targets.push({id:m[1],ts:new Date(b.uploadedAt).getTime()||0});
+        }
+        cursor=res.hasMore?res.cursor:undefined;
+      }while(cursor);
+      const records=await Promise.all(targets.map(async({id,ts})=>{
+        try{
+          const r=await load(id,cloud);
+          if(Array.isArray(r?.story?.people)&&r.story.people.some(p=>p.account===userId)){
+            return {id:r.id,title:r.story.title,updatedAt:ts};
+          }
+        }catch{}
+        return null;
+      }));
+      for(const item of records)if(item)found.push(item);
+    }else if(cloud){
+      const rows=await remote('?select=id,story');
+      for(const r of rows){
+        if(roomUuid.test(r.id)&&Array.isArray(r?.story?.people)&&r.story.people.some(p=>p.account===userId)){
+          found.push({id:r.id,title:r.story.title,updatedAt:0});
+        }
+      }
+    }else{
+      const entries=await readdir(dir).catch(()=>[]);
+      for(const name of entries){
+        const m=name.match(/^([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\.json$/);
+        if(!m)continue;
+        try{
+          const r=await load(m[1],false);
+          if(Array.isArray(r?.story?.people)&&r.story.people.some(p=>p.account===userId)){
+            found.push({id:r.id,title:r.story.title,updatedAt:0});
+          }
+        }catch{}
+      }
+    }
+  }catch{}
+  return found;
+}
+async function getUserRooms(userId,cloud){
+  const account=await load(userId,cloud);
+  if(!account?.story)return [];
+  const existing=Array.isArray(account.story.rooms)?account.story.rooms:[];
+  if(account.story.backfilled)return existing;
+  const scanned=await scanUserRooms(userId,cloud);
+  const merged=mergeRoomLists(existing,scanned);
+  try{
+    await locked(userId,async()=>{
+      const fresh=await load(userId,cloud);
+      if(!fresh?.story)return;
+      fresh.story.rooms=mergeRoomLists(fresh.story.rooms,merged);
+      fresh.story.backfilled=true;
+      const old=fresh.rev++;
+      await save(fresh,old,cloud);
+    });
+  }catch{}
+  return merged;
+}
+async function rememberRoom(userId,room,cloud){
+  try{
+    await locked(userId,async()=>{
+      const record=await load(userId,cloud);
+      if(!record?.story)return;
+      record.story.rooms=mergeRoomLists([{id:room.id,title:room.title,updatedAt:Date.now()}],record.story.rooms);
+      const old=record.rev++;
+      await save(record,old,cloud);
+    });
+  }catch{}
+}
 async function authenticate(data,res,cloud){
   const name=field(data.name,20).normalize('NFC'),pw=data.password;
   if(typeof pw!=='string'||!pw.length||pw.length>128)fail(400,'비밀번호를 확인해 주세요.');
@@ -65,7 +153,7 @@ async function authenticate(data,res,cloud){
       if(pw.length<8)fail(400,'비밀번호는 8자 이상 입력해 주세요.');
       if(record)fail(409,'이미 등록된 이름이에요.');
       const salt=randomBytes(16).toString('hex');
-      record={id,rev:1,story:{name,salt,digest:(await derive(pw,salt)).toString('hex')}};
+      record={id,rev:1,story:{name,salt,digest:(await derive(pw,salt)).toString('hex'),rooms:[],backfilled:true}};
       await save(record,null,cloud)
     }else{
       const a=record?.story;
@@ -79,7 +167,9 @@ async function authenticate(data,res,cloud){
     }
     const secret=randomBytes(32).toString('hex'),age=604800;
     await save({id:privateId('session',secret),rev:1,story:{user:{id,name:record.story.name},expires:Date.now()+age*1000}},null,cloud);
-    cookie(res,secret,age);return {name:record.story.name}
+    cookie(res,secret,age);
+    const rooms=record.story.backfilled?(record.story.rooms||[]):await getUserRooms(id,cloud);
+    return {name:record.story.name,rooms}
   })
 }
 function view(r,user,legacy){
@@ -93,7 +183,7 @@ export default async function handler(req,res){
     const cloud=Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY);
     if(process.env.VERCEL&&!cloud&&!process.env.BLOB_READ_WRITE_TOKEN)fail(503,'저장소 연결을 확인해 주세요.');
     const id=new URL(req.url,'http://localhost').searchParams.get('id');
-    if(id&&!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id))fail(404,'방을 찾을 수 없어요.');
+    if(id&&!roomUuid.test(id))fail(404,'방을 찾을 수 없어요.');
     let data={};
     if(req.method==='POST'){
       if(!req.headers['content-type']?.startsWith('application/json'))fail(415,'JSON 요청이 필요해요.');
@@ -108,7 +198,10 @@ export default async function handler(req,res){
     const session=secret&&await load(privateId('session',secret),cloud);
     const user=session?.story.expires>Date.now()?session.story.user:null;
     if(data.action==='logout'){if(user){session.story.expires=0;const old=session.rev++;await save(session,old,cloud)}cookie(res,'',0);res.end('{}');return}
-    if(!id&&req.method==='GET'){res.end(JSON.stringify({name:user?.name||null}));return}
+    if(!id&&req.method==='GET'){
+      const rooms=user?await getUserRooms(user.id,cloud):[];
+      res.end(JSON.stringify({name:user?.name||null,rooms}));return
+    }
     if(req.method==='POST'&&!user)fail(401,'로그인 후 작성할 수 있어요.');
     const legacy=req.headers['x-legacy-key'],key=id||randomUUID();
     const result=await locked(key,async()=>{
@@ -135,6 +228,9 @@ export default async function handler(req,res){
       }else fail(400,'지원하지 않는 요청이에요.');
       const old=r.rev++;await save(r,old,cloud);return view(r,user,legacy)
     });
+    if(user&&req.method==='POST'&&['create','join','write'].includes(data.action)){
+      await rememberRoom(user.id,result,cloud);
+    }
     res.end(JSON.stringify(result))
   }catch(e){res.statusCode=e.status||500;res.end(JSON.stringify({error:e.status?e.message:'요청을 처리하지 못했어요.'}))}
 }
