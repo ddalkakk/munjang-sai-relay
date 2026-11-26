@@ -1,12 +1,113 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;700&amp;display=swap"><title>컴남 릴레이 소설</title><link rel="stylesheet" href="/style.css?v=4"><script type="module" src="/app.js?v=4"></script></head>
-<body><header><nav><a href="/" class="brand" aria-label="컴남 릴레이 소설 홈"><span class="wordmark">컴남</span><span class="brandtype">릴레이 소설</span></a><div class="actions"><button id="theme" class="icon" aria-label="다크 모드" aria-pressed="false"><i aria-hidden="true" class="moon"></i></button><button id="account" class="soft">로그인</button></div></nav></header>
-<main id="home">
-  <div class="deskhead"><div><h1>나의 집필실</h1><p>친구와 한 문단씩 이어 쓰는 소설.</p></div><button id="new"><span aria-hidden="true">＋</span> 새 집필실</button></div>
-  <section class="shelf" aria-labelledby="shelfTitle"><h2 id="shelfTitle">최근 참여한 원고</h2>
-    <div class="manuscript"><div class="jacket" aria-hidden="true"><canvas id="landscape"></canvas></div><div id="recent"></div></div>
-  </section>
-</main>
-<main id="room" hidden><div class="roomhead"><span class="eyebrow">공동 원고</span><h1 id="title">원고 불러오는 중</h1><button id="invite" class="soft">초대 링크 복사</button><input id="link" readonly hidden aria-label="초대 링크"></div><div class="grid"><article class="panel" id="story"></article><aside class="panel"><h2>집필 순서</h2><p id="status" aria-live="polite"></p><ol id="people"></ol><button id="join" hidden></button><button id="start" hidden>이어쓰기 시작</button><form id="write" hidden><label>다음 문단<textarea name="text" maxlength="3000" rows="6" required></textarea></label><small id="writeCount">0 / 3,000자</small><button>문단 등록</button></form></aside></div></main>
-<dialog id="modal" aria-labelledby="heading"><div class="dialoghead"><h2 id="heading"></h2><button id="close" class="icon" aria-label="닫기">×</button></div><div id="auth"><div class="segments"><button id="login" aria-pressed="true">로그인</button><button id="register" aria-pressed="false">계정 만들기</button></div><form id="credentials"><label>이름<input name="name" autocomplete="username" maxlength="20" required></label><label>비밀번호<span class="pw"><input name="password" type="password" autocomplete="current-password" maxlength="128" required><button type="button" class="showpw" id="showpw">보기</button></span></label><small id="hint"></small><button id="submitAuth">로그인</button></form></div>
-<form id="create" hidden><label>소설 제목<input name="title" maxlength="80" required placeholder="제목을 입력하세요"></label><label>첫 문단<textarea name="text" maxlength="3000" rows="6" required placeholder="이야기의 첫 장면을 들려주세요"></textarea></label><small id="createCount">0 / 3,000자</small><button>집필실 만들기</button></form><div id="profile" hidden><p id="who"></p><button id="logout" class="soft">로그아웃</button></div><p id="error" role="alert"></p></dialog><div id="notice" role="status"></div></body></html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="preconnect" href="https://fastly.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&amp;display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <title>컴남 릴레이 소설</title>
+  <link rel="stylesheet" href="/style.css?v=5">
+  <script type="module" src="/app.js?v=5"></script>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/" class="brand" aria-label="컴남 릴레이 소설 홈">
+        <span class="wordmark">컴남</span>
+        <span class="brandtype">릴레이 소설</span>
+      </a>
+      <div class="actions">
+        <button id="theme" class="icon" aria-label="다크 모드" aria-pressed="false">
+          <i aria-hidden="true" class="moon"></i>
+        </button>
+        <button id="account" class="soft">로그인</button>
+      </div>
+    </nav>
+  </header>
+
+  <main id="home">
+    <div class="deskhead">
+      <div>
+        <h1>나의 집필실</h1>
+        <p>친구와 한 문단씩 이어 쓰는 소설.</p>
+      </div>
+      <button id="new"><span aria-hidden="true">＋</span> 새 집필실</button>
+    </div>
+    <section class="shelf" aria-labelledby="shelfTitle">
+      <h2 id="shelfTitle">최근 참여한 원고</h2>
+      <div class="manuscript">
+        <div class="jacket" aria-hidden="true"><canvas id="landscape"></canvas></div>
+        <div id="recent"></div>
+      </div>
+    </section>
+  </main>
+
+  <main id="room" hidden>
+    <div class="roomhead">
+      <span class="eyebrow">공동 원고</span>
+      <h1 id="title">원고 불러오는 중</h1>
+      <button id="invite" class="soft">초대 링크 복사</button>
+      <input id="link" readonly hidden aria-label="초대 링크">
+    </div>
+    <div class="grid">
+      <article class="panel" id="story"></article>
+      <aside class="panel">
+        <h2>집필 순서</h2>
+        <p id="status" aria-live="polite"></p>
+        <ol id="people"></ol>
+        <button id="join" hidden></button>
+        <button id="start" hidden>이어쓰기 시작</button>
+        <form id="write" hidden>
+          <label>다음 문단
+            <textarea name="text" maxlength="3000" rows="6" required placeholder="이야기를 자연스럽게 이어 써 보세요"></textarea>
+          </label>
+          <small id="writeCount" class="counter">0 / 3,000자</small>
+          <button>문단 등록</button>
+        </form>
+      </aside>
+    </div>
+  </main>
+
+  <dialog id="modal" aria-labelledby="heading">
+    <div class="dialoghead">
+      <h2 id="heading"></h2>
+      <button id="close" class="icon" aria-label="닫기">×</button>
+    </div>
+    <div id="auth">
+      <div class="segments">
+        <button id="login" type="button" aria-pressed="true">로그인</button>
+        <button id="register" type="button" aria-pressed="false">계정 만들기</button>
+      </div>
+      <form id="credentials">
+        <label>이름<input name="name" autocomplete="username" maxlength="20" required></label>
+        <label>비밀번호
+          <span class="pw">
+            <input name="password" type="password" autocomplete="current-password" maxlength="128" required>
+            <button type="button" class="showpw" id="showpw">보기</button>
+          </span>
+        </label>
+        <small id="hint"></small>
+        <button id="submitAuth">로그인</button>
+      </form>
+    </div>
+    <form id="create" hidden>
+      <label>소설 제목<input name="title" maxlength="80" required placeholder="제목을 입력하세요"></label>
+      <label>첫 문단<textarea name="text" maxlength="3000" rows="6" required placeholder="이야기의 첫 장면을 들려주세요"></textarea></label>
+      <small id="createCount" class="counter">0 / 3,000자</small>
+      <button>집필실 만들기</button>
+    </form>
+    <div id="profile" hidden>
+      <p id="who"></p>
+      <button id="logout" class="soft">로그아웃</button>
+    </div>
+    <p id="error" role="alert"></p>
+  </dialog>
+
+  <div id="notice" role="status"></div>
+</body>
+</html>
