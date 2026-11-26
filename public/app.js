@@ -28,17 +28,20 @@ function dialog(part){
  if(!$('modal').open)$('modal').showModal()
 }
 $('modal').onclose=()=>{const pw=$('credentials').elements.password;pw.value='';pw.type='password';$('showpw').textContent='보기';intent=''};
-$('close').onclick=()=>$('modal').close();$('showpw').onclick=()=>{const p=$('credentials').elements.password;p.type=p.type==='password'?'text':'password';$('showpw').textContent=p.type==='password'?'보기':'숨기기'};
+$('close').onclick=()=>$('modal').close();
+$('showpw').onclick=()=>{const p=$('credentials').elements.password;p.type=p.type==='password'?'text':'password';$('showpw').textContent=p.type==='password'?'보기':'숨기기'};
 $('login').onclick=()=>authMode('login');$('register').onclick=()=>authMode('register');
-function showUser(){ $('account').textContent=user\vert{}\vert{}'로그인';$('who').textContent=user?user+' 님으로 로그인했어요.':'' }
-$('account').onclick=()=>{intent='';dialog(user?'profile':'auth')};$('new').onclick=()=>{intent='create';dialog(user?'create':'auth')};
+function showUser(){ $('account').textContent=user||'로그인';$('who').textContent=user?user+' 님으로 로그인했어요.':'' }
+$('account').onclick=()=>{intent='';dialog(user?'profile':'auth')};
+$('new').onclick=()=>{intent='create';dialog(user?'create':'auth')};
 function bindCounter(textarea,counterId){
  const counter=$(counterId);if(!textarea||!counter)return;
  const update=()=>{counter.textContent=textarea.value.length.toLocaleString()+' / 3,000자'};
  textarea.addEventListener('input',update);update();
 }
 bindCounter($('create')?.elements.text,'createCount');
-bindCounter($('write')?.elements.text,'writeCount');$('write')?.elements.text.addEventListener('input',()=>{if(draftRev===null&&state)draftRev=state.rev});
+bindCounter($('write')?.elements.text,'writeCount');
+$('write')?.elements.text.addEventListener('input',()=>{if(draftRev===null&&state)draftRev=state.rev});
 function draw(s){
  if(state&&s.rev<state.rev)return;
  const same=state&&s.rev===state.rev&&s.me===state.me&&s.reclaim===state.reclaim;
@@ -49,8 +52,8 @@ function draw(s){
  $('story').replaceChildren(...s.paragraphs.map((p,i)=>{const section=el('section','');section.append(el('small',(i+1)+'번째 문단 · '+p.name),el('p',p.text));return section}));
  $('people').replaceChildren(...s.people.map((p,i)=>{const current=s.started&&s.turn===i;const li=el('li',p+(i===s.me?' (나)':'')+(current?' · 집필 중':''));li.classList.toggle('current',current);return li}));
  $('status').textContent=s.started?s.people[s.turn]+' 님이 이어 쓸 차례예요.':s.people.length+'명 참여 중 · 두 명 이상 모이면 시작할 수 있어요.';
- $('join').hidden=s.me>=0\vert{}\vert{}(s.started&&!s.reclaim);$('join').textContent=!user?'로그인하고 참여하기':s.reclaim?'기존 참여 기록 연결':'집필에 참여하기';
- $('start').hidden=!user\vert{}\vert{}s.started\vert{}\vert{}s.me!==0\vert{}\vert{}s.people.length<2;$('write').hidden=!user||!s.started||s.turn!==s.me
+ $('join').hidden=s.me>=0||(s.started&&!s.reclaim);$('join').textContent=!user?'로그인하고 참여하기':s.reclaim?'기존 참여 기록 연결':'집필에 참여하기';
+ $('start').hidden=!user||s.started||s.me!==0||s.people.length<2;$('write').hidden=!user||!s.started||s.turn!==s.me
 }
 async function refresh(){try{draw(await api(null,roomId))}catch(e){if(!state)$('status').textContent=e.message}}
 async function run(button,fn){
@@ -64,12 +67,14 @@ $('credentials').onsubmit=e=>{e.preventDefault();run($('submitAuth'),async()=>{
   const join=intent==='join';$('modal').close();if(roomId){if(join)draw(await api({action:'join'},roomId));else await refresh()}toast('로그인했어요.')
 })};
 $('logout').onclick=()=>run($('logout'),async()=>{await api({action:'logout'});location.reload()});
-$('create').onsubmit=e=>{e.preventDefault();run(e.submitter,async()=>{const v=await api({action:'create',...Object.fromEntries(new FormData(e.target))});location.href='/?room='+v.id})};$('join').onclick=()=>{if(!user){intent='join';dialog('auth');return}run($('join'),async()=>draw(await api({action:'join'},roomId)))};$('start').onclick=()=>run($('start'),async()=>draw(await api({action:'start'},roomId)));$('write').onsubmit=e=>{e.preventDefault();run(e.submitter,async()=>{const v=await api({action:'write',text:e.target.elements.text.value,rev:draftRev??state.rev},roomId);draftRev=null;e.target.reset();$('writeCount').textContent='0 / 3,000자';draw(v);toast('다음 작가에게 차례를 넘겼어요.')})};
+$('create').onsubmit=e=>{e.preventDefault();run(e.submitter,async()=>{const v=await api({action:'create',...Object.fromEntries(new FormData(e.target))});location.href='/?room='+v.id})};
+$('join').onclick=()=>{if(!user){intent='join';dialog('auth');return}run($('join'),async()=>draw(await api({action:'join'},roomId)))};
+$('start').onclick=()=>run($('start'),async()=>draw(await api({action:'start'},roomId)));
+$('write').onsubmit=e=>{e.preventDefault();run(e.submitter,async()=>{const v=await api({action:'write',text:e.target.elements.text.value,rev:draftRev??state.rev},roomId);draftRev=null;e.target.reset();$('writeCount').textContent='0 / 3,000자';draw(v);toast('다음 작가에게 차례를 넘겼어요.')})};
 $('invite').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast('초대 링크를 복사했어요.')}catch{$('link').hidden=false;$('link').value=location.href;$('link').select()}};
 $('home').hidden=!!roomId;$('room').hidden=!roomId;
-try{user=(await api()).name;showUser()}catch(e){toast(e.message)}
-if(roomId){await refresh();setInterval(()=>{if(!document.hidden)refresh()},3500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})}
-else {
+
+if(!roomId){
   let recent;
   try { recent=JSON.parse(localStorage.getItem('relay-recent')) } catch {}
   const content=$('recent');
@@ -83,6 +88,9 @@ else {
   }
   drawLandscape();
 }
+
+try{user=(await api()).name;showUser()}catch(e){toast(e.message)}
+if(roomId){await refresh();setInterval(()=>{if(!document.hidden)refresh()},3500);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})}
 
 // A two-ink landscape print for the manuscript jacket.
 function drawLandscape(){
