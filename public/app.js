@@ -27,6 +27,16 @@ function formatDate(ts) {
   return d.getFullYear() + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + String(d.getDate()).padStart(2, '0');
 }
 
+function getRoomToken(id) {
+  try { return localStorage.getItem('relay-token-' + id) || ''; } catch { return ''; }
+}
+function saveRoomToken(id, token) {
+  try {
+    if (token) localStorage.setItem('relay-token-' + id, token);
+    else localStorage.removeItem('relay-token-' + id);
+  } catch {}
+}
+
 function getLocalHistory() {
   const map = new Map();
   try {
@@ -81,6 +91,10 @@ async function api(data, id) {
   const headers = { 'Content-Type': 'application/json' };
   const legacy = localStorage.getItem('relay-key');
   if (id && legacy) headers['X-Legacy-Key'] = legacy;
+  if (id) {
+    const token = getRoomToken(id);
+    if (token) headers['X-Room-Token'] = token;
+  }
   const r = await fetch('/api/room' + (id ? '?id=' + encodeURIComponent(id) : ''), {
     method: data ? 'POST' : 'GET',
     headers,
@@ -108,6 +122,20 @@ $('theme').onclick = () => {
   localStorage.setItem('theme', dark ? 'dark' : 'light');
 };
 
+function bindPwToggle(btnId, formId) {
+  const btn = $(btnId), form = $(formId);
+  if (!btn || !form) return;
+  btn.onclick = () => {
+    const p = form.elements.password;
+    p.type = p.type === 'password' ? 'text' : 'password';
+    btn.textContent = p.type === 'password' ? '보기' : '숨기기';
+  };
+}
+bindPwToggle('showpw', 'credentials');
+bindPwToggle('showCreatePw', 'create');
+bindPwToggle('showRoomPassPw', 'roomPass');
+bindPwToggle('showLockPw', 'lockForm');
+
 function authMode(value) {
   mode = value;
   const reg = mode === 'register';
@@ -124,29 +152,31 @@ function authMode(value) {
 }
 
 function dialog(part) {
-  for (const k of ['auth', 'create', 'profile']) $(k).hidden = k !== part;
-  $('heading').textContent = { auth: '작가 계정', create: '새 집필실', profile: '내 계정' }[part];
+  for (const k of ['auth', 'create', 'roomPass', 'profile']) $(k).hidden = k !== part;
+  $('heading').textContent = {
+    auth: '작가 계정',
+    create: '새 집필실',
+    roomPass: state?.hasPassword ? '원고 비밀번호 변경' : '원고 비밀번호 설정',
+    profile: '내 계정'
+  }[part];
   $('error').textContent = '';
   if (part === 'auth') authMode('login');
+  if (part === 'roomPass') $('removeRoomPass').hidden = !state?.hasPassword;
   if (!$('modal').open) $('modal').showModal();
 }
 
 $('modal').onclose = () => {
-  const pw = $('credentials').elements.password;
-  pw.value = '';
-  pw.type = 'password';
-  $('showpw').textContent = '보기';
+  for (const [f, b] of [['credentials', 'showpw'], ['create', 'showCreatePw'], ['roomPass', 'showRoomPassPw']]) {
+    const pw = $(f)?.elements?.password;
+    if (pw) { pw.value = ''; pw.type = 'password'; }
+    if ($(b)) $(b).textContent = '보기';
+  }
   intent = '';
 };
 $('modal').addEventListener('click', e => {
   if (e.target === $('modal')) $('modal').close();
 });
 $('close').onclick = () => $('modal').close();
-$('showpw').onclick = () => {
-  const p = $('credentials').elements.password;
-  p.type = p.type === 'password' ? 'text' : 'password';
-  $('showpw').textContent = p.type === 'password' ? '보기' : '숨기기';
-};
 $('login').onclick = () => authMode('login');
 $('register').onclick = () => authMode('register');
 
@@ -156,6 +186,7 @@ function showUser() {
 }
 $('account').onclick = () => { intent = ''; dialog(user ? 'profile' : 'auth'); };
 $('new').onclick = () => { intent = 'create'; dialog(user ? 'create' : 'auth'); };
+$('roomPassBtn').onclick = () => { intent = ''; dialog('roomPass'); };
 
 function bindCounter(textarea, counterId) {
   const counter = $(counterId);
@@ -168,9 +199,26 @@ bindCounter($('create')?.elements.text, 'createCount');
 bindCounter($('write')?.elements.text, 'writeCount');
 
 function draw(s) {
-  if (state && s.rev < state.rev) return;
-  const same = state && s.rev === state.rev && s.me === state.me && s.reclaim === state.reclaim && lastUser === user;
-  const prevLen = state ? state.paragraphs.length : s.paragraphs.length;
+  if (s.locked) {
+    state = s;
+    lastUser = user;
+    saveRoomToken(s.id, '');
+    $('lockGate').hidden = false;
+    $('roomHead').hidden = true;
+    $('roomGrid').hidden = true;
+    $('story').replaceChildren();
+    document.title = '비공개 원고 · ' + brand;
+    return;
+  }
+
+  $('lockGate').hidden = true;
+  $('roomHead').hidden = false;
+  $('roomGrid').hidden = false;
+  $('lockError').textContent = '';
+
+  if (state && !state.locked && s.rev < state.rev) return;
+  const same = state && !state.locked && s.rev === state.rev && s.me === state.me && s.reclaim === state.reclaim && s.hasPassword === state.hasPassword && lastUser === user;
+  const prevLen = state && !state.locked ? state.paragraphs.length : s.paragraphs.length;
   state = s;
   lastUser = user;
   if (same) return;
@@ -178,6 +226,9 @@ function draw(s) {
   $('title').textContent = s.title;
   document.title = s.title + ' · ' + brand;
   if (s.me >= 0) saveLocalHistory({ id: s.id, title: s.title, updatedAt: Date.now() });
+
+  $('roomPassBtn').hidden = !user || s.me !== 0;
+  $('roomPassBtn').textContent = s.hasPassword ? '비밀번호 변경' : '비밀번호 설정';
 
   const sections = s.paragraphs.map((p, i) => {
     const section = el('section', '');
@@ -250,6 +301,52 @@ async function run(button, fn) {
   }
 }
 
+$('lockForm').onsubmit = e => {
+  e.preventDefault();
+  const btn = e.submitter || $('lockForm').querySelector('button:not([type="button"])');
+  $('lockError').textContent = '';
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = '확인 중…';
+  (async () => {
+    try {
+      const v = await api({ action: 'unlock', password: e.target.elements.password.value }, roomId);
+      if (v.roomToken) saveRoomToken(roomId, v.roomToken);
+      e.target.reset();
+      draw(v);
+      toast('원고 잠금을 해제했어요.');
+    } catch (err) {
+      $('lockError').textContent = err.message;
+      e.target.elements.password.focus();
+    } finally {
+      btn.textContent = original;
+      btn.disabled = false;
+    }
+  })();
+};
+
+$('roomPass').onsubmit = e => {
+  e.preventDefault();
+  run(e.submitter, async () => {
+    const v = await api({ action: 'setPassword', password: e.target.elements.password.value }, roomId);
+    if (v.roomToken) saveRoomToken(roomId, v.roomToken);
+    $('modal').close();
+    draw(v);
+    toast('원고 비밀번호를 저장했어요.');
+  });
+};
+
+$('removeRoomPass').onclick = () => {
+  if (!confirm('이 원고의 비밀번호 잠금을 해제할까요? 초대 링크가 있는 누구나 볼 수 있게 됩니다.')) return;
+  run($('removeRoomPass'), async () => {
+    const v = await api({ action: 'setPassword', password: '' }, roomId);
+    saveRoomToken(roomId, '');
+    $('modal').close();
+    draw(v);
+    toast('원고 비밀번호 잠금을 해제했어요.');
+  });
+};
+
 $('credentials').onsubmit = e => {
   e.preventDefault();
   run($('submitAuth'), async () => {
@@ -284,6 +381,7 @@ $('create').onsubmit = e => {
   e.preventDefault();
   run(e.submitter, async () => {
     const v = await api({ action: 'create', ...Object.fromEntries(new FormData(e.target)) });
+    if (v.roomToken) saveRoomToken(v.id, v.roomToken);
     saveLocalHistory({ id: v.id, title: v.title, updatedAt: Date.now() });
     location.href = '/?room=' + v.id;
   });
@@ -332,7 +430,7 @@ $('write').onsubmit = e => {
 $('invite').onclick = async () => {
   try {
     await navigator.clipboard.writeText(location.href);
-    toast('초대 링크를 복사했어요.');
+    toast(state?.hasPassword ? '초대 링크를 복사했어요. 비밀번호도 함께 알려 주세요.' : '초대 링크를 복사했어요.');
   } catch {
     $('link').hidden = false;
     $('link').value = location.href;
@@ -345,6 +443,7 @@ async function deleteManuscript(item, container) {
   container?.classList.add('removing');
   await new Promise(ok => setTimeout(ok, 220));
   removeLocalHistory(item.id);
+  saveRoomToken(item.id, '');
   serverRooms = serverRooms.filter(r => r.id !== item.id);
   if (user) {
     try {
@@ -494,7 +593,7 @@ if (!roomId) renderHome();
   }
   if (roomId) {
     await refresh();
-    setInterval(() => { if (!document.hidden) refresh(); }, 3500);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    setInterval(() => { if (!document.hidden && !state?.locked) refresh(); }, 3500);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && !state?.locked) refresh(); });
   }
 })();
