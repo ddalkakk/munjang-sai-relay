@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const roomId = new URLSearchParams(location.search).get('room');
 const brand = '컴남 릴레이 소설';
-let draftRev = null, user = null, lastUser = null, state = null, mode = 'login', intent = '', timer;
+let user = null, lastUser = null, state = null, mode = 'login', intent = '', timer;
 let serverRooms = [], landscapeDrawn = false;
 
 function el(tag, text, className) {
@@ -102,7 +102,8 @@ $('theme').onclick = () => {
 function authMode(value) {
   mode = value;
   const reg = mode === 'register';
-  $('login').setAttribute('aria-pressed', String(!reg));$('register').setAttribute('aria-pressed', String(reg));
+  $('login').setAttribute('aria-pressed', String(!reg));
+  $('register').setAttribute('aria-pressed', String(reg));
   const pw = $('credentials').elements.password;
   pw.autocomplete = reg ? 'new-password' : 'current-password';
   pw.minLength = reg ? 8 : 1;
@@ -118,7 +119,7 @@ function dialog(part) {
   $('heading').textContent = { auth: '작가 계정', create: '새 집필실', profile: '내 계정' }[part];
   $('error').textContent = '';
   if (part === 'auth') authMode('login');
-  if (!$('modal').open)$('modal').showModal();
+  if (!$('modal').open) $('modal').showModal();
 }
 
 $('modal').onclose = () => {
@@ -129,14 +130,16 @@ $('modal').onclose = () => {
   intent = '';
 };
 $('modal').addEventListener('click', e => {
-  if (e.target === $('modal'))$('modal').close();
+  if (e.target === $('modal')) $('modal').close();
 });
-$('close').onclick = () => $('modal').close();$('showpw').onclick = () => {
+$('close').onclick = () => $('modal').close();
+$('showpw').onclick = () => {
   const p = $('credentials').elements.password;
   p.type = p.type === 'password' ? 'text' : 'password';
   $('showpw').textContent = p.type === 'password' ? '보기' : '숨기기';
 };
-$('login').onclick = () => authMode('login');$('register').onclick = () => authMode('register');
+$('login').onclick = () => authMode('login');
+$('register').onclick = () => authMode('register');
 
 function showUser() {
   $('account').textContent = user || '로그인';
@@ -154,11 +157,6 @@ function bindCounter(textarea, counterId) {
 }
 bindCounter($('create')?.elements.text, 'createCount');
 bindCounter($('write')?.elements.text, 'writeCount');
-
-$('write')?.elements.text.addEventListener('input', e => {
-  if (!e.target.value) draftRev = null;
-  else if (draftRev === null && state) draftRev = state.rev;
-});
 
 function draw(s) {
   if (state && s.rev < state.rev) return;
@@ -212,8 +210,11 @@ async function run(button, fn) {
   button.textContent = '처리 중…';
   try { await fn(); }
   catch (e) {
-    if ($('modal').open)$('error').textContent = e.message;
-    else toast(e.message);
+    if ($('modal').open) $('error').textContent = e.message;
+    else {
+      toast(e.message);
+      if (roomId) refresh();
+    }
   }
   finally {
     if (button.textContent === '처리 중…') button.textContent = original;
@@ -273,10 +274,14 @@ $('start').onclick = () => run($('start'), async () => draw(await api({ action: 
 $('write').onsubmit = e => {
   e.preventDefault();
   run(e.submitter, async () => {
-    const v = await api({ action: 'write', text: e.target.elements.text.value, rev: draftRev ?? state.rev }, roomId);
-    draftRev = null;
+    const v = await api({
+      action: 'write',
+      text: e.target.elements.text.value,
+      rev: state.rev,
+      count: state.paragraphs.length
+    }, roomId);
     e.target.reset();
-    if ($('writeCount'))$('writeCount').textContent = '0 / 3,000자';
+    if ($('writeCount')) $('writeCount').textContent = '0 / 3,000자';
     draw(v);
     toast('다음 작가에게 차례를 넘겼어요.');
   });
