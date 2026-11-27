@@ -144,6 +144,8 @@ button, #recent a {
   padding: 11px 20px;
   background: var(--button);
   color: var(--on-button);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   transition: transform 0.22s var(--spring), box-shadow 0.22s ease, background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
 }
 
@@ -410,6 +412,7 @@ h1 {
   padding: 18px 14px 18px 20px;
   color: var(--ink);
   text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .history-meta {
@@ -676,6 +679,10 @@ textarea { resize: vertical; }
   from { opacity: 0; transform: translateY(16px) scale(0.94); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+@keyframes sheetIn {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @keyframes paraIn {
   from { opacity: 0; transform: translateY(18px) scale(0.99); background: var(--soft); border-radius: 8px; }
   to { opacity: 1; transform: translateY(0) scale(1); background: transparent; }
@@ -693,26 +700,118 @@ textarea { resize: vertical; }
   50% { box-shadow: 0 0 0 8px rgba(33, 87, 78, 0); }
 }
 
+/* ===== 모바일 전용 최적화 레이아웃 (PC 화면 영향 없음) ===== */
 @media (max-width: 760px) {
-  nav, main { width: calc(100% - 36px); }
-  nav { min-height: 64px; }
-  .wordmark { font-size: 1.5rem; }
-  .brand { gap: 10px; }
-  .brandtype { font-size: 0.84rem; padding-left: 10px; }
-  .actions { gap: 6px; }
-  #account { max-width: 7.5em; padding: 9px 13px; }
-  .deskhead { align-items: flex-start; flex-direction: column; gap: 18px; }
-  .deskhead p { margin-top: 6px; }
-  .manuscript { grid-template-columns: 1fr; }
-  .jacket { min-height: 0; height: clamp(110px, 28vw, 165px); }
+  header { padding-top: env(safe-area-inset-top); }
+  nav, main { width: calc(100% - 32px); }
+  nav { min-height: 58px; }
+
+  .wordmark { font-size: 1.42rem; }
+  .brand { gap: 8px; }
+  .brandtype { font-size: 0.82rem; padding-left: 8px; }
+  .actions { gap: 4px; }
+  #account { max-width: 7.5em; padding: 8px 12px; font-size: 0.88rem; }
+
+  main { padding: 24px 0 calc(48px + env(safe-area-inset-bottom)); }
+
+  /* 홈 화면 */
+  .deskhead { align-items: stretch; flex-direction: column; gap: 16px; padding-bottom: 24px; }
+  .deskhead h1 { font-size: 2rem; }
+  .deskhead p { margin-top: 6px; font-size: 0.96rem; }
+  .deskhead button { width: 100%; min-height: 48px; justify-content: center; font-size: 0.98rem; }
+
+  .manuscript { grid-template-columns: 1fr; border-radius: 14px; }
+  .manuscript:hover { transform: none; }
+  .jacket { min-height: 0; height: clamp(118px, 32vw, 165px); }
   .jacket canvas { object-position: 50% 62%; }
-  #recent { padding: 24px; gap: 12px; }
-  .history-list { grid-template-columns: 1fr; }
-  .grid { grid-template-columns: minmax(0, 1fr); }
+
+  #recent { padding: 20px 18px; gap: 10px; }
+  #recent h3 { font-size: 1.4rem; }
+  .recent-actions { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
+  .recent-actions a, .recent-actions button {
+    min-height: 46px;
+    padding: 10px 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .history { margin-top: 26px; }
+  .history-list { grid-template-columns: 1fr; gap: 10px; }
+  .history-item:hover { transform: none; }
+  .history-card { padding: 15px 12px 15px 16px; }
+  .history-name { font-size: 1rem; }
+  .history-del { width: 52px; font-size: 1.3rem; }
+
+  /* 집필실 화면 */
+  .roomhead { grid-template-columns: 1fr; justify-items: stretch; padding-bottom: 18px; margin-bottom: 18px; gap: 10px; }
+  .roomhead h1 { font-size: 1.65rem; line-height: 1.3; }
+  #invite { width: 100%; min-height: 44px; }
+
+  .grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .panel { padding: 20px 18px; border-radius: 14px; }
   aside.panel { position: static; }
-  .roomhead { grid-template-columns: 1fr; justify-items: start; }
-  .panel { padding: 22px; }
-  main { padding-top: 32px; }
+
+  article section + section { padding-top: 20px; margin-top: 22px; }
+  article p { font-size: 1.02rem; line-height: 1.92; margin-top: 8px; }
+
+  /* 참여 작가 목록을 가로 칩 형태로 압축 */
+  #people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    list-style: none;
+    padding: 0;
+    margin: 12px 0 18px;
+  }
+  #people li {
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--soft);
+    border: 1px solid var(--rule);
+    font-size: 0.88rem;
+    line-height: 1.35;
+  }
+  #people li.current {
+    background: var(--accent);
+    color: var(--on-button);
+    border-color: transparent;
+    transform: none;
+  }
+  #people li.current::after {
+    background: var(--on-button);
+    margin-left: 6px;
+  }
+
+  /* 모바일 터치 친화적 버튼 & iOS 자동 확대 방지(16px) */
+  input, textarea { font-size: 16px; padding: 12px 13px; }
+  textarea { min-height: 132px; }
+  #join, #start, #claim { min-height: 50px; font-size: 1rem; }
+  .write-actions { grid-template-columns: 1fr 1.6fr; gap: 8px; }
+  .write-actions button { min-height: 48px; padding: 12px 10px; }
+
+  /* 모바일 전용 바텀 시트 모달 */
+  dialog {
+    margin: auto 0 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 88dvh;
+    overflow-y: auto;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+    padding: 22px 20px calc(24px + env(safe-area-inset-bottom));
+  }
+  dialog[open] { animation: sheetIn 0.32s var(--ease) both; }
+  dialog form button[type="submit"], dialog #submitAuth, dialog #logout { min-height: 48px; width: 100%; }
+
+  #notice:not(:empty) {
+    bottom: calc(18px + env(safe-area-inset-bottom));
+    max-width: calc(100% - 32px);
+    padding: 11px 18px;
+    font-size: 0.88rem;
+    text-align: center;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
