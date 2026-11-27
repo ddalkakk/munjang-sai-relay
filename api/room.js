@@ -15,9 +15,7 @@ async function load(id,cloud){
     const {get}=await import('@vercel/blob');
     const result=await get('rooms/'+id+'.json',{access:'private',useCache:false});
     if(!result)return;
-    const record=await new Response(result.stream).json();
-    Object.defineProperty(record,'etag',{value:result.blob.etag});
-    return record;
+    return new Response(result.stream).json();
   }
   if(cloud)return (await remote('?id=eq.'+id))[0];
   try{return JSON.parse(await readFile(new URL(id+'.json',dir),'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
@@ -26,9 +24,14 @@ async function save(record,old,cloud){
   if(process.env.BLOB_READ_WRITE_TOKEN){
     const {put,BlobPreconditionFailedError}=await import('@vercel/blob');
     const options={access:'private',addRandomSuffix:false,contentType:'application/json'};
-    if(old!==null){options.allowOverwrite=true;options.ifMatch=record.etag}
+    if(old!==null)options.allowOverwrite=true;
     try{await put('rooms/'+record.id+'.json',JSON.stringify(record),options)}
-    catch(error){if(error instanceof BlobPreconditionFailedError)fail(409,'집필실이 변경되었어요. 다시 확인해 주세요.');throw error}
+    catch(error){
+      if(error instanceof BlobPreconditionFailedError||(old===null&&/already exists/i.test(error?.message||''))){
+        fail(409,old===null?'이미 등록된 항목이에요.':'집필실이 변경되었어요. 다시 확인해 주세요.');
+      }
+      throw error;
+    }
     return;
   }
   if(cloud){const rows=await remote(old===null?'':'?id=eq.'+record.id+'&rev=eq.'+old,old===null?'POST':'PATCH',record);if(!rows.length)fail(409,'방이 변경되었어요. 다시 확인해 주세요.');return}
