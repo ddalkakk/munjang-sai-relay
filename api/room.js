@@ -78,6 +78,16 @@ const derive=(password,salt)=>new Promise((resolve,reject)=>scrypt(password,salt
 function cookie(res,value,age){
   res.setHeader('Set-Cookie','relay_session='+value+'; Path=/; HttpOnly; SameSite=Lax; Max-Age='+age+(process.env.VERCEL?'; Secure':''))
 }
+function makeRoomToken(r){
+  return r?.story?.passDigest?hash(r.id+':'+r.story.passDigest):null;
+}
+function hasRoomAccess(r,user,token){
+  if(!r?.story?.passDigest)return true;
+  if(user&&r.story.people.some(p=>p.account===user.id))return true;
+  if(typeof token!=='string'||!/^[0-9a-f]{64}$/.test(token))return false;
+  const expected=makeRoomToken(r);
+  return timingSafeEqual(Buffer.from(token,'hex'),Buffer.from(expected,'hex'));
+}
 function mergeRoomLists(a,b){
   const map=new Map();
   for(const item of [...(Array.isArray(a)?a:[]),...(Array.isArray(b)?b:[])]){
@@ -232,7 +242,7 @@ function findLastWriterIndex(s){
   return s.people.findIndex(p=>p.name===last.name);
 }
 function view(r,user,legacy){
-  const {people,lastWriter:_,...story}=r.story;
+  const {people,lastWriter:_,passSalt:__,passDigest:___,...story}=r.story;
   const lastWriter=findLastWriterIndex(r.story);
   const turn=typeof r.story.turn==='number'&&r.story.turn>=0&&r.story.turn<people.length?r.story.turn:-1;
   return {
@@ -241,6 +251,7 @@ function view(r,user,legacy){
     ...story,
     turn,
     lastWriter,
+    hasPassword:Boolean(r.story.passDigest),
     people:people.map(p=>p.name),
     me:user?people.findIndex(p=>p.account===user.id):-1,
     reclaim:!!legacy&&people.some(p=>!p.account&&p.key===hash(legacy))
@@ -271,25 +282,54 @@ export default async function handler(req,res){
       const rooms=user?await getUserRooms(user.id,cloud):[];
       res.end(JSON.stringify({name:user?.name||null,rooms}));return
     }
+    const legacy=req.headers['x-legacy-key'];
+    const roomToken=req.headers['x-room-token'];
+    if(req.method==='POST'&&data.action==='unlock'){
+      const r=id&&await load(id,cloud);
+      if(!r?.story?.people)fail(404,'방을 찾을 수 없어요.');
+      if(!r.story.passDigest){res.end(JSON.stringify(view(r,user,legacy)));return}
+      const pw=data.password;
+      if(typeof pw!=='string'||!pw.length||pw.length>64)fail(400,'비밀번호를 입력해 주세요.');
+      const k=await derive(pw,r.story.passSalt);
+      if(!timingSafeEqual(k,Buffer.from(r.story.passDigest,'hex')))fail(403,'비밀번호가 일치하지 않아요.');
+      res.end(JSON.stringify({...view(r,user,legacy),roomToken:makeRoomToken(r)}));return
+    }
     if(req.method==='POST'&&!user)fail(401,'로그인 후 이용할 수 있어요.');
     if(data.action==='removeRoom'){
       if(typeof data.roomId!=='string'||!roomUuid.test(data.roomId))fail(400,'삭제할 원고를 확인해 주세요.');
       const rooms=await forgetRoom(user.id,data.roomId,cloud);
       res.end(JSON.stringify({rooms}));return
     }
-    const legacy=req.headers['x-legacy-key'],key=id||randomUUID();
+    let nextPass=null;
+    if(req.method==='POST'&&(data.action==='create'||data.action==='setPassword')){
+      const rawPw=data.password;
+      if(rawPw!==undefined&&rawPw!==''){
+        if(typeof rawPw!=='string'||rawPw.length>64)fail(400,'비밀번호는 64자 이하로 입력해 주세요.');
+        const passSalt=randomBytes(16).toString('hex');
+        const passDigest=(await derive(rawPw,passSalt)).toString('hex');
+        nextPass={passSalt,passDigest};
+      }
+    }
+    const key=id||randomUUID();
     const result=await locked(key,async()=>{
       if(!id&&data.action==='create'){
         const {name}=user,title=field(data.title,80),text=field(data.text,3000);
-        const r={id:key,rev:1,story:{title,people:[{name,account:user.id}],started:false,turn:-1,lastWriter:user.id,paragraphs:[{name,text,account:user.id}]}};
-        await save(r,null,cloud);return view(r,user,legacy)
+        const story={title,people:[{name,account:user.id}],started:false,turn:-1,lastWriter:user.id,paragraphs:[{name,text,account:user.id}]};
+        if(nextPass){story.passSalt=nextPass.passSalt;story.passDigest=nextPass.passDigest}
+        const r={id:key,rev:1,story};
+        await save(r,null,cloud);
+        const out=view(r,user,legacy);
+        if(nextPass)out.roomToken=makeRoomToken(r);
+        return out;
       }
       if(req.method==='GET'){
         const r=id&&await load(id,cloud);
         if(!r?.story?.people)fail(404,'방을 찾을 수 없어요.');
+        if(!hasRoomAccess(r,user,roomToken))return {id:r.id,locked:true};
         return view(r,user,legacy);
       }
       const r=await mutateRoom(id,cloud,room=>{
+        if(!hasRoomAccess(room,user,roomToken))fail(403,'비밀번호를 입력해야 이용할 수 있어요.');
         const s=room.story,me=s.people.findIndex(p=>p.account===user.id);
         if(data.action==='join'){
           if(me>=0)return false;
@@ -299,6 +339,12 @@ export default async function handler(req,res){
             if(s.people.some(p=>p.name===user.name))fail(409,'이 방에서 이미 사용 중인 이름이에요.');
             s.people.push({name:user.name,account:user.id})
           }
+          return true;
+        }
+        if(data.action==='setPassword'){
+          if(me!==0)fail(403,'방장만 비밀번호를 설정할 수 있어요.');
+          if(nextPass){s.passSalt=nextPass.passSalt;s.passDigest=nextPass.passDigest}
+          else{delete s.passSalt;delete s.passDigest}
           return true;
         }
         if(data.action==='start'){
@@ -337,7 +383,9 @@ export default async function handler(req,res){
         }
         fail(400,'지원하지 않는 요청이에요.');
       });
-      return view(r,user,legacy);
+      const out=view(r,user,legacy);
+      if(data.action==='setPassword'&&r.story.passDigest)out.roomToken=makeRoomToken(r);
+      return out;
     });
     if(user&&req.method==='POST'&&['create','join','write'].includes(data.action)){
       await rememberRoom(user.id,result,cloud);
