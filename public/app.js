@@ -102,8 +102,7 @@ $('theme').onclick = () => {
 function authMode(value) {
   mode = value;
   const reg = mode === 'register';
-  $('login').setAttribute('aria-pressed', String(!reg));
-  $('register').setAttribute('aria-pressed', String(reg));
+  $('login').setAttribute('aria-pressed', String(!reg));$('register').setAttribute('aria-pressed', String(reg));
   const pw = $('credentials').elements.password;
   pw.autocomplete = reg ? 'new-password' : 'current-password';
   pw.minLength = reg ? 8 : 1;
@@ -119,7 +118,7 @@ function dialog(part) {
   $('heading').textContent = { auth: '작가 계정', create: '새 집필실', profile: '내 계정' }[part];
   $('error').textContent = '';
   if (part === 'auth') authMode('login');
-  if (!$('modal').open) $('modal').showModal();
+  if (!$('modal').open)$('modal').showModal();
 }
 
 $('modal').onclose = () => {
@@ -130,16 +129,14 @@ $('modal').onclose = () => {
   intent = '';
 };
 $('modal').addEventListener('click', e => {
-  if (e.target === $('modal')) $('modal').close();
+  if (e.target === $('modal'))$('modal').close();
 });
-$('close').onclick = () => $('modal').close();
-$('showpw').onclick = () => {
+$('close').onclick = () => $('modal').close();$('showpw').onclick = () => {
   const p = $('credentials').elements.password;
   p.type = p.type === 'password' ? 'text' : 'password';
   $('showpw').textContent = p.type === 'password' ? '보기' : '숨기기';
 };
-$('login').onclick = () => authMode('login');
-$('register').onclick = () => authMode('register');
+$('login').onclick = () => authMode('login');$('register').onclick = () => authMode('register');
 
 function showUser() {
   $('account').textContent = user || '로그인';
@@ -190,10 +187,16 @@ function draw(s) {
   }));
 
   $('status').textContent = s.started
-    ? s.people[s.turn] + ' 님이 이어 쓸 차례예요.'
-    : s.people.length + '명 참여 중 · 두 명 이상 모이면 시작할 수 있어요.';
-  $('join').hidden = s.me >= 0 || (s.started && !s.reclaim);
-  $('join').textContent = !user ? '로그인하고 참여하기' : s.reclaim ? '기존 참여 기록 연결' : '집필에 참여하기';
+    ? s.people[s.turn] + ' 님이 이어 쓸 차례예요. (총 ' + s.people.length + '명 참여 중)'
+    : s.people.length + '명 참여 중 · 친구를 더 초대하거나, 2명 이상 모이면 시작할 수 있어요.';
+  $('join').hidden = s.me >= 0;
+  $('join').textContent = !user
+    ? '로그인하고 참여하기'
+    : s.reclaim
+      ? '기존 참여 기록 연결'
+      : s.started
+        ? '중간에 참여하기'
+        : '집필에 참여하기';
   $('start').hidden = !user || s.started || s.me !== 0 || s.people.length < 2;
   $('write').hidden = !user || !s.started || s.turn !== s.me;
 }
@@ -209,7 +212,7 @@ async function run(button, fn) {
   button.textContent = '처리 중…';
   try { await fn(); }
   catch (e) {
-    if ($('modal').open) $('error').textContent = e.message;
+    if ($('modal').open)$('error').textContent = e.message;
     else toast(e.message);
   }
   finally {
@@ -230,8 +233,12 @@ $('credentials').onsubmit = e => {
     const join = intent === 'join';
     $('modal').close();
     if (roomId) {
-      if (join) draw(await api({ action: 'join' }, roomId));
-      else await refresh();
+      if (join) {
+        draw(await api({ action: 'join' }, roomId));
+        toast('집필에 참여했어요.');
+        return;
+      }
+      await refresh();
     } else {
       renderHome();
     }
@@ -255,7 +262,10 @@ $('create').onsubmit = e => {
 
 $('join').onclick = () => {
   if (!user) { intent = 'join'; dialog('auth'); return; }
-  run($('join'), async () => draw(await api({ action: 'join' }, roomId)));
+  run($('join'), async () => {
+    draw(await api({ action: 'join' }, roomId));
+    toast('집필에 참여했어요.');
+  });
 };
 
 $('start').onclick = () => run($('start'), async () => draw(await api({ action: 'start' }, roomId)));
@@ -266,7 +276,7 @@ $('write').onsubmit = e => {
     const v = await api({ action: 'write', text: e.target.elements.text.value, rev: draftRev ?? state.rev }, roomId);
     draftRev = null;
     e.target.reset();
-    if ($('writeCount')) $('writeCount').textContent = '0 / 3,000자';
+    if ($('writeCount'))$('writeCount').textContent = '0 / 3,000자';
     draw(v);
     toast('다음 작가에게 차례를 넘겼어요.');
   });
