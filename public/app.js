@@ -56,6 +56,15 @@ function saveLocalHistory(item) {
   } catch {}
 }
 
+function removeLocalHistory(targetId) {
+  const next = getLocalHistory().filter(r => r.id !== targetId);
+  try {
+    localStorage.setItem('relay-history', JSON.stringify(next));
+    if (next[0]) localStorage.setItem('relay-recent', JSON.stringify({ id: next[0].id, title: next[0].title }));
+    else localStorage.removeItem('relay-recent');
+  } catch {}
+}
+
 function mergedHistory() {
   const map = new Map();
   for (const item of [...serverRooms, ...getLocalHistory()]) {
@@ -170,23 +179,41 @@ function draw(s) {
   document.title = s.title + ' · ' + brand;
   if (s.me >= 0) saveLocalHistory({ id: s.id, title: s.title, updatedAt: Date.now() });
 
-  $('story').replaceChildren(...s.paragraphs.map((p, i) => {
+  const sections = s.paragraphs.map((p, i) => {
     const section = el('section', '');
     if (i >= prevLen) section.classList.add('is-new');
     section.append(el('small', (i + 1) + '번째 문단 · ' + p.name), el('p', p.text));
     return section;
-  }));
+  });
+  $('story').replaceChildren(...sections);
+  if (s.paragraphs.length > prevLen) {
+    sections[sections.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 
   $('people').replaceChildren(...s.people.map((p, i) => {
     const current = s.started && s.turn === i;
-    const li = el('li', p + (i === s.me ? ' (나)' : '') + (current ? ' · 집필 중' : ''));
+    const isLast = s.started && s.turn === -1 && i === s.lastWriter;
+    const suffix = (i === s.me ? ' (나)' : '') + (current ? ' · 집필 중' : isLast ? ' · 직전 작성' : '');
+    const li = el('li', p + suffix);
     li.classList.toggle('current', current);
+    li.classList.toggle('last-writer', isLast);
     return li;
   }));
 
-  $('status').textContent = s.started
-    ? s.people[s.turn] + ' 님이 이어 쓸 차례예요. (총 ' + s.people.length + '명 참여 중)'
-    : s.people.length + '명 참여 중 · 친구를 더 초대하거나, 2명 이상 모이면 시작할 수 있어요.';
+  if (!s.started) {
+    $('status').textContent = s.people.length + '명 참여 중 · 친구를 더 초대하거나, 2명 이상 모이면 시작할 수 있어요.';
+  } else if (s.turn >= 0) {
+    $('status').textContent = s.turn === s.me
+      ? '지금 내 차례예요! 다음 문단을 자유롭게 써 보세요.'
+      : s.people[s.turn] + ' 님이 지금 집필 중이에요. (총 ' + s.people.length + '명 참여 중)';
+  } else if (s.me >= 0 && s.me === s.lastWriter) {
+    $('status').textContent = '방금 문단을 작성하셨어요! 다른 작가가 이어 쓸 때까지 기다려 주세요.';
+  } else if (s.me >= 0) {
+    $('status').textContent = '지금 이어 쓸 수 있어요! 아래 버튼을 눌러 집필을 시작하세요.';
+  } else {
+    $('status').textContent = '다음 작가를 기다리는 중이에요. (총 ' + s.people.length + '명 참여 중)';
+  }
+
   $('join').hidden = s.me >= 0;
   $('join').textContent = !user
     ? '로그인하고 참여하기'
@@ -196,6 +223,7 @@ function draw(s) {
         ? '중간에 참여하기'
         : '집필에 참여하기';
   $('start').hidden = !user || s.started || s.me !== 0 || s.people.length < 2;
+  $('claim').hidden = !user || !s.started || s.me < 0 || s.turn !== -1 || s.me === s.lastWriter;
   $('write').hidden = !user || !s.started || s.turn !== s.me;
 }
 
@@ -269,7 +297,21 @@ $('join').onclick = () => {
   });
 };
 
-$('start').onclick = () => run($('start'), async () => draw(await api({ action: 'start' }, roomId)));
+$('start').onclick = () => run($('start'), async () => {
+  draw(await api({ action: 'start' }, roomId));
+  toast('이어쓰기를 시작했어요! 직전 작가를 제외한 누구나 쓸 수 있어요.');
+});
+
+$('claim').onclick = () => run($('claim'), async () => {
+  draw(await api({ action: 'claim' }, roomId));
+  $('write')?.elements.text?.focus();
+  toast('집필을 시작했어요!');
+});
+
+$('release').onclick = () => run($('release'), async () => {
+  draw(await api({ action: 'release' }, roomId));
+  toast('다른 작가가 이어 쓸 수 있도록 차례를 양보했어요.');
+});
 
 $('write').onsubmit = e => {
   e.preventDefault();
@@ -283,7 +325,7 @@ $('write').onsubmit = e => {
     e.target.reset();
     if ($('writeCount')) $('writeCount').textContent = '0 / 3,000자';
     draw(v);
-    toast('다음 작가에게 차례를 넘겼어요.');
+    toast('문단을 등록했어요! 다음 작가를 기다립니다.');
   });
 };
 
@@ -297,6 +339,24 @@ $('invite').onclick = async () => {
     $('link').select();
   }
 };
+
+async function deleteManuscript(item, container) {
+  if (!confirm(`"${item.title}" 원고를 내 목록에서 삭제할까요?`)) return;
+  container?.classList.add('removing');
+  await new Promise(ok => setTimeout(ok, 220));
+  removeLocalHistory(item.id);
+  serverRooms = serverRooms.filter(r => r.id !== item.id);
+  if (user) {
+    try {
+      const res = await api({ action: 'removeRoom', roomId: item.id });
+      if (Array.isArray(res.rooms)) serverRooms = res.rooms;
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+  renderHome();
+  toast('목록에서 원고를 삭제했어요.');
+}
 
 // A two-ink landscape print for the manuscript jacket (HiDPI sharp).
 function drawLandscape() {
@@ -359,7 +419,9 @@ function renderHome() {
   const count = $('shelfCount');
   const historyBox = $('history');
   const historyList = $('historyList');
+  const manuscriptCard = content.closest('.manuscript');
 
+  manuscriptCard?.classList.remove('removing');
   content.replaceChildren();
   historyList.replaceChildren();
 
@@ -371,14 +433,21 @@ function renderHome() {
     const dateText = formatDate(latest.updatedAt);
     content.append(el('span', dateText ? '가장 최근 원고 · ' + dateText : '가장 최근 원고', 'tag'));
     content.append(el('h3', latest.title));
+
+    const actions = el('div', '', 'recent-actions');
     const link = el('a', '원고 열기');
     link.href = '/?room=' + encodeURIComponent(latest.id);
-    content.append(link);
+    const delBtn = el('button', '목록에서 삭제', 'danger-btn');
+    delBtn.type = 'button';
+    delBtn.onclick = () => deleteManuscript(latest, manuscriptCard);
+    actions.append(link, delBtn);
+    content.append(actions);
 
     const rest = list.slice(1);
     historyBox.hidden = !rest.length;
-    for (const item of rest) {
-      const li = el('li');
+    rest.forEach((item, idx) => {
+      const li = el('li', '', 'history-item');
+      li.style.setProperty('--i', idx);
       const a = el('a', '', 'history-card');
       a.href = '/?room=' + encodeURIComponent(item.id);
       const meta = el('div', '', 'history-meta');
@@ -386,9 +455,16 @@ function renderHome() {
       const d = formatDate(item.updatedAt);
       if (d) meta.append(el('span', '최근 활동 · ' + d, 'history-date'));
       a.append(meta, el('span', '→', 'history-arrow'));
-      li.append(a);
+
+      const del = el('button', '×', 'history-del');
+      del.type = 'button';
+      del.setAttribute('aria-label', item.title + ' 목록에서 삭제');
+      del.title = '목록에서 삭제';
+      del.onclick = () => deleteManuscript(item, li);
+
+      li.append(a, del);
       historyList.append(li);
-    }
+    });
   } else {
     count.hidden = true;
     historyBox.hidden = true;
