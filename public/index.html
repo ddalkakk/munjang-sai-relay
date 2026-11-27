@@ -11,8 +11,8 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&amp;display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <title>컴남 릴레이 소설</title>
-  <link rel="stylesheet" href="/style.css?v=10">
-  <script type="module" src="/app.js?v=10"></script>
+  <link rel="stylesheet" href="/style.css?v=11">
+  <script type="module" src="/app.js?v=11"></script>
 </head>
 <body>
   <header>
@@ -55,13 +55,32 @@
   </main>
 
   <main id="room" hidden>
-    <div class="roomhead">
+    <section id="lockGate" class="panel lock-gate" hidden>
+      <span class="lock-badge">비공개 원고</span>
+      <h1>비밀번호를 입력해 주세요</h1>
+      <p>초대 링크와 함께 공유받은 원고 비밀번호를 입력해야 내용을 볼 수 있어요.</p>
+      <form id="lockForm">
+        <label>원고 비밀번호
+          <span class="pw">
+            <input name="password" type="password" maxlength="64" required placeholder="비밀번호를 입력하세요">
+            <button type="button" class="showpw" id="showLockPw">보기</button>
+          </span>
+        </label>
+        <p id="lockError" class="inline-error" role="alert"></p>
+        <button class="shine">원고 열기</button>
+      </form>
+    </section>
+
+    <div id="roomHead" class="roomhead">
       <span class="eyebrow">공동 원고</span>
       <h1 id="title">원고 불러오는 중</h1>
-      <button id="invite" class="soft">초대 링크 복사</button>
+      <div class="roomhead-actions">
+        <button id="roomPassBtn" class="soft" hidden>비밀번호 설정</button>
+        <button id="invite" class="soft">초대 링크 복사</button>
+      </div>
       <input id="link" readonly hidden aria-label="초대 링크">
     </div>
-    <div class="grid">
+    <div id="roomGrid" class="grid">
       <article class="panel" id="story"></article>
       <aside class="panel">
         <h2>참여 작가</h2>
@@ -110,7 +129,27 @@
       <label>소설 제목<input name="title" maxlength="80" required placeholder="제목을 입력하세요"></label>
       <label>첫 문단<textarea name="text" maxlength="3000" rows="6" required placeholder="이야기의 첫 장면을 들려주세요"></textarea></label>
       <small id="createCount" class="counter">0 / 3,000자</small>
+      <label>원고 비밀번호
+        <span class="pw">
+          <input name="password" type="password" maxlength="64" required placeholder="초대받은 친구가 입력할 비밀번호">
+          <button type="button" class="showpw" id="showCreatePw">보기</button>
+        </span>
+      </label>
+      <small>비밀번호가 없으면 초대 링크로 들어와도 원고를 볼 수 없어요.</small>
       <button class="shine">집필실 만들기</button>
+    </form>
+    <form id="roomPass" hidden>
+      <label>새 원고 비밀번호
+        <span class="pw">
+          <input name="password" type="password" maxlength="64" required placeholder="비밀번호를 입력하세요">
+          <button type="button" class="showpw" id="showRoomPassPw">보기</button>
+        </span>
+      </label>
+      <small>비밀번호를 변경하면 초대받은 친구에게 새 비밀번호를 알려 주세요.</small>
+      <div class="pass-actions">
+        <button type="button" id="removeRoomPass" class="danger-btn" hidden>잠금 해제</button>
+        <button class="shine">비밀번호 저장</button>
+      </div>
     </form>
     <div id="profile" hidden>
       <p id="who"></p>
