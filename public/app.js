@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const roomId = new URLSearchParams(location.search).get('room');
 const brand = '컴남 릴레이 소설';
-let user = null, lastUser = null, state = null, mode = 'login', intent = '', timer;
+let user = null, lastUser = null, authChecked = false, state = null, mode = 'login', intent = '', timer;
 let serverRooms = [], landscapeDrawn = false;
 
 function el(tag, text, className) {
@@ -37,45 +37,59 @@ function saveRoomToken(id, token) {
   } catch {}
 }
 
+function historyKey() {
+  return user ? 'relay-history:' + user : '';
+}
+
+function clearBrowserSecrets() {
+  try {
+    localStorage.removeItem('relay-history');
+    localStorage.removeItem('relay-recent');
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('relay-token-') || k.startsWith('relay-history:'))) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch {}
+}
+
 function getLocalHistory() {
+  const key = historyKey();
+  if (!key) return [];
   const map = new Map();
   try {
-    const list = JSON.parse(localStorage.getItem('relay-history') || '[]');
+    const list = JSON.parse(localStorage.getItem(key) || '[]');
     if (Array.isArray(list)) {
       for (const item of list) {
         if (item?.id && item.title) map.set(item.id, item);
       }
     }
   } catch {}
-  try {
-    const legacy = JSON.parse(localStorage.getItem('relay-recent'));
-    if (legacy?.id && legacy.title && !map.has(legacy.id)) {
-      map.set(legacy.id, { id: legacy.id, title: legacy.title, updatedAt: 0 });
-    }
-  } catch {}
   return [...map.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 function saveLocalHistory(item) {
-  if (!item?.id || !item.title) return;
+  const key = historyKey();
+  if (!key || !item?.id || !item.title) return;
   const list = getLocalHistory().filter(r => r.id !== item.id);
   const next = [{ id: item.id, title: item.title, updatedAt: item.updatedAt || Date.now() }, ...list].slice(0, 50);
   try {
-    localStorage.setItem('relay-history', JSON.stringify(next));
-    localStorage.setItem('relay-recent', JSON.stringify({ id: item.id, title: item.title }));
+    localStorage.setItem(key, JSON.stringify(next));
   } catch {}
 }
 
 function removeLocalHistory(targetId) {
+  const key = historyKey();
+  if (!key) return;
   const next = getLocalHistory().filter(r => r.id !== targetId);
   try {
-    localStorage.setItem('relay-history', JSON.stringify(next));
-    if (next[0]) localStorage.setItem('relay-recent', JSON.stringify({ id: next[0].id, title: next[0].title }));
-    else localStorage.removeItem('relay-recent');
+    localStorage.setItem(key, JSON.stringify(next));
   } catch {}
 }
 
 function mergedHistory() {
+  if (!user) return [];
   const map = new Map();
   for (const item of [...serverRooms, ...getLocalHistory()]) {
     if (!item?.id || !item.title) continue;
@@ -225,7 +239,7 @@ function draw(s) {
 
   $('title').textContent = s.title;
   document.title = s.title + ' · ' + brand;
-  if (s.me >= 0) saveLocalHistory({ id: s.id, title: s.title, updatedAt: Date.now() });
+  if (user && s.me >= 0) saveLocalHistory({ id: s.id, title: s.title, updatedAt: Date.now() });
 
   $('roomPassBtn').hidden = !user || s.me !== 0;
   $('roomPassBtn').textContent = s.hasPassword ? '비밀번호 변경' : '비밀번호 설정';
@@ -352,7 +366,8 @@ $('credentials').onsubmit = e => {
   run($('submitAuth'), async () => {
     const v = await api({ action: mode, ...Object.fromEntries(new FormData(e.target)) });
     user = v.name;
-    if (Array.isArray(v.rooms)) serverRooms = v.rooms;
+    authChecked = true;
+    serverRooms = Array.isArray(v.rooms) ? v.rooms : [];
     showUser();
     e.target.elements.password.value = '';
     if (intent === 'create') { dialog('create'); return; }
@@ -374,6 +389,7 @@ $('credentials').onsubmit = e => {
 
 $('logout').onclick = () => run($('logout'), async () => {
   await api({ action: 'logout' });
+  clearBrowserSecrets();
   location.reload();
 });
 
@@ -513,7 +529,6 @@ function drawLandscape() {
 }
 
 function renderHome() {
-  const list = mergedHistory();
   const content = $('recent');
   const count = $('shelfCount');
   const historyBox = $('history');
@@ -523,7 +538,33 @@ function renderHome() {
   manuscriptCard?.classList.remove('removing');
   content.replaceChildren();
   historyList.replaceChildren();
+  drawLandscape();
 
+  if (!authChecked) {
+    count.hidden = true;
+    historyBox.hidden = true;
+    content.append(
+      el('h3', '집필실을 불러오는 중…'),
+      el('p', '로그인 상태를 확인하고 있어요.')
+    );
+    return;
+  }
+
+  if (!user) {
+    count.hidden = true;
+    historyBox.hidden = true;
+    content.append(
+      el('h3', '로그인이 필요해요.'),
+      el('p', '로그인하면 내가 참여한 원고 목록을 확인하고 새 집필실을 열 수 있어요.')
+    );
+    const loginBtn = el('button', '로그인하기', 'shine');
+    loginBtn.type = 'button';
+    loginBtn.onclick = () => { intent = ''; dialog('auth'); };
+    content.append(loginBtn);
+    return;
+  }
+
+  const list = mergedHistory();
   if (list.length) {
     count.textContent = '총 ' + list.length + '편';
     count.hidden = false;
@@ -572,10 +613,9 @@ function renderHome() {
       el('p', '새 집필실에서 첫 문단을 쓰거나 친구가 보낸 초대 링크로 참여하세요.')
     );
   }
-  drawLandscape();
 }
 
-// 1. 화면 전환 및 홈 UI는 서버 응답을 기다리지 않고 즉시 렌더링
+// 1. 화면 전환 및 풍경 표지는 즉시 렌더링 (원고 목록은 로그인 확인 후 표시)
 $('home').hidden = !!roomId;
 $('room').hidden = !roomId;
 if (!roomId) renderHome();
@@ -585,11 +625,13 @@ if (!roomId) renderHome();
   try {
     const info = await api();
     user = info.name;
-    if (Array.isArray(info.rooms)) serverRooms = info.rooms;
+    serverRooms = user && Array.isArray(info.rooms) ? info.rooms : [];
     showUser();
-    if (!roomId) renderHome();
   } catch (e) {
     toast(e.message);
+  } finally {
+    authChecked = true;
+    if (!roomId) renderHome();
   }
   if (roomId) {
     await refresh();
