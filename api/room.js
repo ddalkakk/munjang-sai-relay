@@ -217,9 +217,10 @@ export default async function handler(req,res){
         if(me>=0)return view(r,user,legacy);
         const prior=legacy&&s.people.find(p=>!p.account&&p.key===hash(legacy));
         if(prior){prior.account=user.id;delete prior.key}
-        else{if(s.started)fail(409,'이미 집필을 시작했어요.');
+        else{
           if(s.people.some(p=>p.name===user.name))fail(409,'이 방에서 이미 사용 중인 이름이에요.');
-          s.people.push({name:user.name,account:user.id})}
+          s.people.push({name:user.name,account:user.id})
+        }
       }else if(data.action==='start'){
         if(me!==0||s.started||s.people.length<2)fail(409,'두 명 이상 모이면 방장이 시작할 수 있어요.');s.started=true;s.turn=1
       }else if(data.action==='write'){
