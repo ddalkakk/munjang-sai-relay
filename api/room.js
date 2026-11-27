@@ -41,6 +41,25 @@ async function save(record,old,cloud){
   const tmp=new URL(record.id+'.tmp',dir);
   await writeFile(tmp,JSON.stringify(record));await rename(tmp,new URL(record.id+'.json',dir))
 }
+async function mutateRoom(id,cloud,fn){
+  for(let attempt=0;attempt<3;attempt++){
+    const r=await load(id,cloud);
+    if(!r?.story?.people)fail(404,'방을 찾을 수 없어요.');
+    const changed=fn(r);
+    if(!changed)return r;
+    const old=r.rev++;
+    try{
+      await save(r,old,cloud);
+      return r;
+    }catch(e){
+      if(e.status===409&&attempt<2){
+        await new Promise(ok=>setTimeout(ok,150*(attempt+1)));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
 
 const queues=new Map();
 async function locked(key,fn){
@@ -210,24 +229,40 @@ export default async function handler(req,res){
         const r={id:key,rev:1,story:{title,people:[{name,account:user.id}],started:false,turn:0,paragraphs:[{name,text}]}};
         await save(r,null,cloud);return view(r,user,legacy)
       }
-      const r=id&&await load(id,cloud);if(!r?.story.people)fail(404,'방을 찾을 수 없어요.');
-      if(req.method==='GET')return view(r,user,legacy);
-      const s=r.story,me=s.people.findIndex(p=>p.account===user.id);
-      if(data.action==='join'){
-        if(me>=0)return view(r,user,legacy);
-        const prior=legacy&&s.people.find(p=>!p.account&&p.key===hash(legacy));
-        if(prior){prior.account=user.id;delete prior.key}
-        else{
-          if(s.people.some(p=>p.name===user.name))fail(409,'이 방에서 이미 사용 중인 이름이에요.');
-          s.people.push({name:user.name,account:user.id})
+      if(req.method==='GET'){
+        const r=id&&await load(id,cloud);
+        if(!r?.story?.people)fail(404,'방을 찾을 수 없어요.');
+        return view(r,user,legacy);
+      }
+      const r=await mutateRoom(id,cloud,room=>{
+        const s=room.story,me=s.people.findIndex(p=>p.account===user.id);
+        if(data.action==='join'){
+          if(me>=0)return false;
+          const prior=legacy&&s.people.find(p=>!p.account&&p.key===hash(legacy));
+          if(prior){prior.account=user.id;delete prior.key}
+          else{
+            if(s.people.some(p=>p.name===user.name))fail(409,'이 방에서 이미 사용 중인 이름이에요.');
+            s.people.push({name:user.name,account:user.id})
+          }
+          return true;
         }
-      }else if(data.action==='start'){
-        if(me!==0||s.started||s.people.length<2)fail(409,'두 명 이상 모이면 방장이 시작할 수 있어요.');s.started=true;s.turn=1
-      }else if(data.action==='write'){
-        if(!s.started||me!==s.turn||data.rev!==r.rev)fail(409,'현재 집필 차례를 확인해 주세요.');
-        s.paragraphs.push({name:s.people[me].name,text:field(data.text,3000)});s.turn=(me+1)%s.people.length
-      }else fail(400,'지원하지 않는 요청이에요.');
-      const old=r.rev++;await save(r,old,cloud);return view(r,user,legacy)
+        if(data.action==='start'){
+          if(me!==0||s.started||s.people.length<2)fail(409,'두 명 이상 모이면 방장이 시작할 수 있어요.');
+          s.started=true;s.turn=1;
+          return true;
+        }
+        if(data.action==='write'){
+          if(!s.started||me!==s.turn)fail(409,'현재 집필 차례를 확인해 주세요.');
+          if(typeof data.count==='number'?data.count!==s.paragraphs.length:data.rev!==room.rev){
+            fail(409,'새 문단이 먼저 등록되었어요. 화면을 확인해 주세요.');
+          }
+          s.paragraphs.push({name:s.people[me].name,text:field(data.text,3000)});
+          s.turn=(me+1)%s.people.length;
+          return true;
+        }
+        fail(400,'지원하지 않는 요청이에요.');
+      });
+      return view(r,user,legacy);
     });
     if(user&&req.method==='POST'&&['create','join','write'].includes(data.action)){
       await rememberRoom(user.id,result,cloud);
