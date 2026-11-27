@@ -162,6 +162,30 @@ async function rememberRoom(userId,room,cloud){
     });
   }catch{}
 }
+async function forgetRoom(userId,targetId,cloud){
+  return locked(userId,async()=>{
+    for(let attempt=0;attempt<3;attempt++){
+      const record=await load(userId,cloud);
+      if(!record?.story)return [];
+      const prev=Array.isArray(record.story.rooms)?record.story.rooms:[];
+      const next=prev.filter(r=>r&&r.id!==targetId);
+      record.story.rooms=next;
+      record.story.backfilled=true;
+      const old=record.rev++;
+      try{
+        await save(record,old,cloud);
+        return next;
+      }catch(e){
+        if(e.status===409&&attempt<2){
+          await new Promise(ok=>setTimeout(ok,150*(attempt+1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+    return [];
+  });
+}
 async function authenticate(data,res,cloud){
   const name=field(data.name,20).normalize('NFC'),pw=data.password;
   if(typeof pw!=='string'||!pw.length||pw.length>128)fail(400,'비밀번호를 확인해 주세요.');
@@ -191,10 +215,33 @@ async function authenticate(data,res,cloud){
     return {name:record.story.name,rooms}
   })
 }
+function findLastWriterIndex(s){
+  if(s.lastWriter){
+    const idx=s.people.findIndex(p=>p.account===s.lastWriter);
+    if(idx>=0)return idx;
+  }
+  const last=s.paragraphs?.[s.paragraphs.length-1];
+  if(!last)return -1;
+  if(last.account){
+    const idx=s.people.findIndex(p=>p.account===last.account);
+    if(idx>=0)return idx;
+  }
+  return s.people.findIndex(p=>p.name===last.name);
+}
 function view(r,user,legacy){
-  const {people,...story}=r.story;
-  return {id:r.id,rev:r.rev,...story,people:people.map(p=>p.name),me:user?people.findIndex(p=>p.account===user.id):-1,
-    reclaim:!!legacy&&people.some(p=>!p.account&&p.key===hash(legacy))}
+  const {people,lastWriter:_,...story}=r.story;
+  const lastWriter=findLastWriterIndex(r.story);
+  const turn=typeof r.story.turn==='number'&&r.story.turn>=0&&r.story.turn<people.length?r.story.turn:-1;
+  return {
+    id:r.id,
+    rev:r.rev,
+    ...story,
+    turn,
+    lastWriter,
+    people:people.map(p=>p.name),
+    me:user?people.findIndex(p=>p.account===user.id):-1,
+    reclaim:!!legacy&&people.some(p=>!p.account&&p.key===hash(legacy))
+  };
 }
 export default async function handler(req,res){
   res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json; charset=utf-8');
@@ -221,12 +268,17 @@ export default async function handler(req,res){
       const rooms=user?await getUserRooms(user.id,cloud):[];
       res.end(JSON.stringify({name:user?.name||null,rooms}));return
     }
-    if(req.method==='POST'&&!user)fail(401,'로그인 후 작성할 수 있어요.');
+    if(req.method==='POST'&&!user)fail(401,'로그인 후 이용할 수 있어요.');
+    if(data.action==='removeRoom'){
+      if(typeof data.roomId!=='string'||!roomUuid.test(data.roomId))fail(400,'삭제할 원고를 확인해 주세요.');
+      const rooms=await forgetRoom(user.id,data.roomId,cloud);
+      res.end(JSON.stringify({rooms}));return
+    }
     const legacy=req.headers['x-legacy-key'],key=id||randomUUID();
     const result=await locked(key,async()=>{
       if(!id&&data.action==='create'){
         const {name}=user,title=field(data.title,80),text=field(data.text,3000);
-        const r={id:key,rev:1,story:{title,people:[{name,account:user.id}],started:false,turn:0,paragraphs:[{name,text}]}};
+        const r={id:key,rev:1,story:{title,people:[{name,account:user.id}],started:false,turn:-1,lastWriter:user.id,paragraphs:[{name,text,account:user.id}]}};
         await save(r,null,cloud);return view(r,user,legacy)
       }
       if(req.method==='GET'){
@@ -248,16 +300,36 @@ export default async function handler(req,res){
         }
         if(data.action==='start'){
           if(me!==0||s.started||s.people.length<2)fail(409,'두 명 이상 모이면 방장이 시작할 수 있어요.');
-          s.started=true;s.turn=1;
+          s.started=true;
+          s.turn=-1;
+          if(!s.lastWriter)s.lastWriter=s.people[0]?.account||null;
+          return true;
+        }
+        if(data.action==='claim'){
+          if(!s.started||me<0)fail(409,'먼저 집필에 참여해 주세요.');
+          if(s.turn===me)return false;
+          if(typeof s.turn==='number'&&s.turn>=0&&s.turn<s.people.length){
+            fail(409,s.people[s.turn].name+' 님이 이미 집필 중이에요.');
+          }
+          if(findLastWriterIndex(s)===me){
+            fail(409,'바로 직전에 글을 쓰셨어요. 다른 작가가 이어 쓸 차례예요.');
+          }
+          s.turn=me;
+          return true;
+        }
+        if(data.action==='release'){
+          if(!s.started||me<0||s.turn!==me)return false;
+          s.turn=-1;
           return true;
         }
         if(data.action==='write'){
-          if(!s.started||me!==s.turn)fail(409,'현재 집필 차례를 확인해 주세요.');
+          if(!s.started||me!==s.turn)fail(409,'먼저 "내가 이어쓰기" 버튼을 눌러 집필을 시작해 주세요.');
           if(typeof data.count==='number'?data.count!==s.paragraphs.length:data.rev!==room.rev){
             fail(409,'새 문단이 먼저 등록되었어요. 화면을 확인해 주세요.');
           }
-          s.paragraphs.push({name:s.people[me].name,text:field(data.text,3000)});
-          s.turn=(me+1)%s.people.length;
+          s.paragraphs.push({name:s.people[me].name,text:field(data.text,3000),account:user.id});
+          s.lastWriter=user.id;
+          s.turn=-1;
           return true;
         }
         fail(400,'지원하지 않는 요청이에요.');
